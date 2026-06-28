@@ -1,0 +1,33 @@
+{
+  "name": "codex-migrator",
+  "version": "0.1.0",
+  "description": "CLI for migrating Codex conversation history between providers and project directories.",
+  "type": "module",
+  "bin": {
+    "codex-migrate": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test",
+    "typecheck": "tsc --noEmit",
+    "check": "pnpm typecheck && pnpm test && pnpm build"
+  },
+  "keywords": [
+    "codex",
+    "migration",
+    "cli"
+  ],
+  "author": "",
+  "license": "MIT",
+  "packageManager": "pnpm@10.24.0",
+  "dependencies": {
+    "commander": "^14.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

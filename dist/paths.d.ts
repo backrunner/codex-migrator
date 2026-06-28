@@ -1,0 +1,18 @@
+import path from "node:path";
+type PathApi = typeof path.posix;
+export declare function expandPath(input: string): string;
+export declare function resolvePath(input: string, base?: string): string;
+export declare function defaultCodexHome(): string;
+export declare function normalizeDir(input: string): string;
+export declare function stripTrailingSeparator(input: string): string;
+export declare function historyBasename(input: string): string;
+export declare function isHistoryPathAbsolute(input: string): boolean;
+export declare function sameHistoryPath(left: string, right: string): boolean;
+export declare function normalizeHistoryPath(input: string, ...context: string[]): string;
+export declare function stripTrailingSeparatorWith(api: PathApi, input: string): string;
+export declare function isSameOrInside(candidate: string, parent: string): boolean;
+export declare function remapPathPrefix(candidate: string, originalDir: string, targetDir: string): string | undefined;
+export declare function ensureDir(dir: string): void;
+export declare function pathExists(filePath: string): boolean;
+export declare function relativeFromCodexHome(codexHome: string, filePath: string): string;
+export {};

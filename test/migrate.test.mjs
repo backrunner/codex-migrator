@@ -135,3 +135,38 @@ test("write migration does not create a missing codex home", () => {
   assert.equal(result.backupDir, undefined);
   assert.equal(fs.existsSync(missingHome), false);
 });
+
+test("write migration stops before JSONL changes when sqlite preflight fails", () => {
+  const codexHome = makeTempCodexHome();
+  const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  fs.writeFileSync(path.join(codexHome, "state_5.sqlite"), "not a sqlite database");
+
+  const file = path.join(sessionDir, "rollout-test.jsonl");
+  const original = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: { id: "thread-1", cwd: "/old/app", model_provider: "openai" },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(file, original);
+
+  const result = runMigration(
+    { mode: "provider", targetProvider: "packycode", fromProvider: "openai" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: true,
+      includeSqlite: true,
+      json: true,
+    },
+  );
+
+  assert.equal(result.ok, false);
+  assert.equal(result.backupDir, undefined);
+  assert.match(result.warnings[0], /SQLite is not ready/);
+  assert.equal(fs.readFileSync(file, "utf8"), original);
+});

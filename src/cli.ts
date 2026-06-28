@@ -7,6 +7,7 @@ import { listBackups, restoreBackup } from "./restore.js";
 import { projectCounts, providerCounts } from "./sqlite.js";
 import { printError, printJson } from "./output.js";
 import type { BackupListResult, ExecutionOptions, GlobalOptions, MigrationResult, RestoreResult } from "./types.js";
+import { command, hint, list, pathValue, section, status, table, tui, warnLine } from "./tui.js";
 
 const program = new Command();
 
@@ -51,13 +52,26 @@ program
       if (global.json) {
         printJson({ ok: true, kind, rows });
       } else {
-        for (const row of rows) {
-          if ("modelProvider" in row) {
-            process.stdout.write(`${row.count}\t${row.modelProvider}\n`);
-          } else {
-            process.stdout.write(`${row.count}\t${row.cwd}\n`);
-          }
+        process.stdout.write(`${status("success", kind === "providers" ? "Providers" : "Projects")}\n`);
+        if (kind === "providers") {
+          process.stdout.write(
+            table(
+              rows.map((row) =>
+                "modelProvider" in row ? [row.modelProvider, String(row.count)] : ["", ""],
+              ),
+              ["Provider", "Threads"],
+            ),
+          );
+        } else {
+          process.stdout.write(
+            table(
+              rows.map((row) => ("cwd" in row ? [String(row.count), pathValue(row.cwd)] : ["", ""])),
+              ["Threads", "cwd"],
+            ),
+          );
         }
+        process.stdout.write("\n");
+        process.stdout.write(`${hint(`Dry-run a migration first; add ${command("--write")} only after reviewing samples.`)}\n`);
       }
     });
   });
@@ -230,42 +244,67 @@ function printMigration(result: MigrationResult, json: boolean): void {
     return;
   }
 
-  process.stdout.write(`${result.dryRun ? "Dry run" : "Applied"}: ${describeAction(result)}\n`);
-  process.stdout.write(`Codex home: ${result.codexHome}\n`);
-  if (result.backupDir) {
-    process.stdout.write(`Backup: ${result.backupDir}\n`);
-  }
+  const changedSomething = result.jsonl.changedFiles > 0 || result.sqlite.some((db) => db.changedRows > 0);
   process.stdout.write(
-    `JSONL: scanned ${result.jsonl.scannedFiles}, matched ${result.jsonl.matchedFiles}, changed ${result.jsonl.changedFiles} files / ${result.jsonl.changedLines} lines\n`,
+    `${result.dryRun ? status("dry", "Migration preview") : status("success", "Migration applied")} ${tui.bold(describeAction(result))}\n`,
   );
+  process.stdout.write(table([["Codex home", pathValue(result.codexHome)]]));
+  process.stdout.write("\n");
 
-  for (const db of result.sqlite) {
-    if (db.skipped) {
-      process.stdout.write(`SQLite: skipped ${db.database} (${db.reason})\n`);
-    } else {
-      process.stdout.write(
-        `SQLite: ${db.table} in ${db.database}: scanned ${db.scannedRows}, changed ${db.changedRows}\n`,
-      );
-    }
+  if (result.backupDir) {
+    process.stdout.write(table([["Backup", pathValue(result.backupDir)]]));
+    process.stdout.write("\n");
   }
+
+  process.stdout.write(section("Summary"));
+  process.stdout.write(
+    table(
+      [
+        [
+          "JSONL",
+          String(result.jsonl.scannedFiles),
+          String(result.jsonl.matchedFiles),
+          `${result.jsonl.changedFiles} files / ${result.jsonl.changedLines} lines`,
+        ],
+        ...result.sqlite.map((db) => [
+          `SQLite ${db.table}`,
+          db.skipped ? "-" : String(db.scannedRows),
+          db.skipped ? "-" : String(db.matchedRows),
+          db.skipped ? `skipped: ${db.reason}` : `${db.changedRows} rows`,
+        ]),
+      ],
+      ["Surface", "Scanned", "Matched", "Would change"],
+    ),
+  );
+  process.stdout.write("\n");
 
   if (result.jsonl.samples.length > 0) {
-    process.stdout.write("Samples:\n");
-    for (const sample of result.jsonl.samples) {
-      if (sample.toProvider) {
-        process.stdout.write(
-          `- ${sample.id ?? sample.file}: ${sample.fromProvider ?? "(unknown)"} -> ${sample.toProvider}\n`,
-        );
-      } else {
-        process.stdout.write(
-          `- ${sample.id ?? sample.file}: ${sample.fromCwd ?? "(unknown)"} -> ${sample.toCwd ?? "(unknown)"}\n`,
-        );
-      }
-    }
+    process.stdout.write(section("Samples"));
+    process.stdout.write(
+      list(
+        result.jsonl.samples.map((sample) =>
+          sample.toProvider
+            ? `${tui.bold(sample.id ?? sample.file)} ${sample.fromProvider ?? "(unknown)"} ${tui.gray("->")} ${sample.toProvider}`
+            : `${tui.bold(sample.id ?? sample.file)} ${pathValue(sample.fromCwd ?? "(unknown)")} ${tui.gray("->")} ${pathValue(sample.toCwd ?? "(unknown)")}`,
+        ),
+      ),
+    );
+    process.stdout.write("\n");
   }
 
   for (const warning of result.warnings) {
-    process.stderr.write(`Warning: ${warning}\n`);
+    process.stderr.write(`${warnLine(warning)}\n`);
+  }
+
+  process.stdout.write("\n");
+  if (result.dryRun && changedSomething) {
+    process.stdout.write(`${hint(`Review the samples, then rerun with ${command("--write")} to apply.`)}\n`);
+  } else if (result.dryRun) {
+    process.stdout.write(
+      `${hint(`No matching changes found. Try ${command("codex-migrate list providers")} or ${command("codex-migrate list projects")}.`)}\n`,
+    );
+  } else if (result.backupDir) {
+    process.stdout.write(`${hint(`Preview rollback with ${command(`codex-migrate restore ${result.backupDir}`)}.`)}\n`);
   }
 }
 
@@ -276,13 +315,25 @@ function printBackupList(result: BackupListResult, json: boolean): void {
   }
 
   if (result.backups.length === 0) {
-    process.stdout.write(`No backups found under ${result.codexHome}\n`);
+    process.stdout.write(`${status("info", "No backups found")}\n`);
+    process.stdout.write(`${hint(`A migration with ${command("--write")} creates a backup under ${pathValue(result.codexHome)}.`)}\n`);
     return;
   }
 
-  for (const backup of result.backups) {
-    process.stdout.write(`${backup.updatedAt}\t${backup.files}\t${backup.name}\t${backup.path}\n`);
-  }
+  process.stdout.write(`${status("success", "Backups")}\n`);
+  process.stdout.write(
+    table(
+      result.backups.map((backup) => [
+        backup.updatedAt,
+        String(backup.files),
+        tui.bold(backup.name),
+        pathValue(backup.path),
+      ]),
+      ["Updated", "Files", "Name", "Path"],
+    ),
+  );
+  process.stdout.write("\n");
+  process.stdout.write(`${hint(`Preview restore with ${command("codex-migrate restore latest")}.`)}\n`);
 }
 
 function printRestore(result: RestoreResult, json: boolean): void {
@@ -291,62 +342,96 @@ function printRestore(result: RestoreResult, json: boolean): void {
     return;
   }
 
-  process.stdout.write(`${result.dryRun ? "Dry run" : "Restored"}: ${result.backupDir}\n`);
-  process.stdout.write(`Codex home: ${result.codexHome}\n`);
   process.stdout.write(
-    `Files: ${result.restoredFiles} total, ${result.sqliteFiles} SQLite, ${result.removedWalFiles} SQLite sidecars removed\n`,
+    `${result.dryRun ? status("dry", "Restore preview") : status("success", "Restore applied")} ${pathValue(result.backupDir)}\n`,
   );
+  process.stdout.write(
+    table([
+      ["Codex home", pathValue(result.codexHome)],
+      ["Files", String(result.restoredFiles)],
+      ["SQLite files", String(result.sqliteFiles)],
+      ["SQLite sidecars removed", String(result.removedWalFiles)],
+    ]),
+  );
+  process.stdout.write("\n");
 
   if (result.samples.length > 0) {
-    process.stdout.write("Samples:\n");
-    for (const sample of result.samples) {
-      process.stdout.write(`- ${sample.from} -> ${sample.to}\n`);
-    }
+    process.stdout.write(section("Samples"));
+    process.stdout.write(
+      list(result.samples.map((sample) => `${pathValue(sample.from)} ${tui.gray("->")} ${pathValue(sample.to)}`)),
+    );
+    process.stdout.write("\n");
   }
 
   for (const warning of result.warnings) {
-    process.stderr.write(`Warning: ${warning}\n`);
+    process.stderr.write(`${warnLine(warning)}\n`);
+  }
+
+  process.stdout.write("\n");
+  if (result.dryRun && result.ok) {
+    process.stdout.write(`${hint(`Review the file list, then rerun with ${command("--write")} to restore.`)}\n`);
+  } else if (!result.ok) {
+    process.stdout.write(`${hint(`List available backups with ${command("codex-migrate backups list")}.`)}\n`);
   }
 }
 
 function printDoctor(result: ReturnType<typeof runDoctor>): void {
-  process.stdout.write(`Codex home: ${result.codexHome}\n`);
+  process.stdout.write(`${status(result.ok ? "success" : "warning", "Codex history doctor")}\n`);
   process.stdout.write(
-    `platform: ${result.platform.node} (path separator: ${JSON.stringify(result.platform.pathSeparator)})\n`,
+    table([
+      ["Codex home", pathValue(result.codexHome)],
+      ["Platform", `${result.platform.node} ${tui.gray(`separator ${JSON.stringify(result.platform.pathSeparator)}`)}`],
+      ["sqlite3", result.sqlite3Available ? tui.green("available") : tui.yellow("missing")],
+      ["Sessions", `${result.sessionsDir.files} files ${tui.gray(result.sessionsDir.path)}`],
+      ["Archived", `${result.archivedSessionsDir.files} files ${tui.gray(result.archivedSessionsDir.path)}`],
+    ]),
   );
-  process.stdout.write(`sqlite3: ${result.sqlite3Available ? "available" : "missing"}\n`);
-  process.stdout.write(
-    `sessions: ${result.sessionsDir.files} files (${result.sessionsDir.path})\n`,
-  );
-  process.stdout.write(
-    `archived: ${result.archivedSessionsDir.files} files (${result.archivedSessionsDir.path})\n`,
-  );
+  process.stdout.write("\n");
 
-  for (const db of result.sqlite) {
-    if (db.skipped) {
-      process.stdout.write(`SQLite: skipped ${db.database} (${db.reason})\n`);
-    } else {
-      process.stdout.write(`SQLite: ${db.table} in ${db.database}: ${db.scannedRows} rows\n`);
-    }
-  }
+  process.stdout.write(section("SQLite"));
+  process.stdout.write(
+    table(
+      result.sqlite.map((db) => [
+        db.table,
+        db.skipped ? tui.yellow("skipped") : tui.green("ready"),
+        db.skipped ? (db.reason ?? "") : `${db.scannedRows} rows`,
+        pathValue(db.database),
+      ]),
+      ["Table", "Status", "Rows", "Database"],
+    ),
+  );
+  process.stdout.write("\n");
 
   if (result.providers.length > 0) {
-    process.stdout.write("Providers:\n");
-    for (const provider of result.providers) {
-      process.stdout.write(`- ${provider.modelProvider}: ${provider.count}\n`);
-    }
+    process.stdout.write(section("Providers"));
+    process.stdout.write(
+      table(
+        result.providers.map((provider) => [provider.modelProvider, String(provider.count)]),
+        ["Provider", "Threads"],
+      ),
+    );
+    process.stdout.write("\n");
   }
 
   if (result.projects.length > 0) {
-    process.stdout.write("Top projects:\n");
-    for (const project of result.projects) {
-      process.stdout.write(`- ${project.count}\t${project.cwd}\n`);
-    }
+    process.stdout.write(section("Top Projects"));
+    process.stdout.write(
+      table(
+        result.projects.map((project) => [String(project.count), pathValue(project.cwd)]),
+        ["Threads", "cwd"],
+      ),
+    );
+    process.stdout.write("\n");
   }
 
   for (const warning of result.warnings) {
-    process.stderr.write(`Warning: ${warning}\n`);
+    process.stderr.write(`${warnLine(warning)}\n`);
   }
+
+  process.stdout.write("\n");
+  process.stdout.write(
+    `${hint(`Run ${command("codex-migrate list providers")} or ${command("codex-migrate list projects --limit 50")} before migrating.`)}\n`,
+  );
 }
 
 function describeAction(result: MigrationResult): string {

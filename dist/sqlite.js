@@ -35,52 +35,86 @@ export function inspectSqlite(codexHome) {
         }));
     }
     return discoverSqliteCandidates(codexHome).map((candidate) => {
-        if (!fs.existsSync(candidate.database)) {
-            return skipped(candidate, "database not found");
+        try {
+            if (!fs.existsSync(candidate.database)) {
+                return skipped(candidate, "database not found");
+            }
+            if (!tableExists(candidate.database, candidate.table)) {
+                return skipped(candidate, "table not found");
+            }
+            return {
+                database: candidate.database,
+                table: candidate.table,
+                scannedRows: countRows(candidate.database, candidate.table),
+                matchedRows: 0,
+                changedRows: 0,
+                skipped: false,
+            };
         }
-        if (!tableExists(candidate.database, candidate.table)) {
-            return skipped(candidate, "table not found");
+        catch (error) {
+            return skipped(candidate, sqliteErrorMessage(error));
         }
-        return {
-            database: candidate.database,
-            table: candidate.table,
-            scannedRows: countRows(candidate.database, candidate.table),
-            matchedRows: 0,
-            changedRows: 0,
-            skipped: false,
-        };
     });
+}
+export function sqliteWritePreflight(codexHome) {
+    if (!sqlite3Available()) {
+        return [];
+    }
+    const errors = [];
+    for (const candidate of discoverSqliteCandidates(codexHome)) {
+        try {
+            if (!fs.existsSync(candidate.database)) {
+                continue;
+            }
+            if (!tableExists(candidate.database, candidate.table)) {
+                continue;
+            }
+            countRows(candidate.database, candidate.table);
+        }
+        catch (error) {
+            errors.push(`${candidate.database}: ${sqliteErrorMessage(error)}`);
+        }
+    }
+    return errors;
 }
 export function migrateSqlite(codexHome, spec, options) {
     if (!sqlite3Available()) {
         return discoverSqliteCandidates(codexHome).map((candidate) => skipped(candidate, "sqlite3 not found on PATH"));
     }
     return discoverSqliteCandidates(codexHome).map((candidate) => {
-        if (!fs.existsSync(candidate.database)) {
-            return skipped(candidate, "database not found");
-        }
-        if (!tableExists(candidate.database, candidate.table)) {
-            return skipped(candidate, "table not found");
-        }
-        const rows = readRows(candidate.database, candidate.table);
-        const updates = rows
-            .map((row) => updateForRow(row, spec))
-            .filter((update) => update !== undefined);
-        if (options.write && updates.length > 0) {
-            if (!options.backupDir) {
-                throw new Error("backupDir is required when writing SQLite changes");
+        try {
+            if (!fs.existsSync(candidate.database)) {
+                return skipped(candidate, "database not found");
             }
-            backupSqlite(codexHome, options.backupDir, candidate.database);
-            applyUpdates(candidate.database, candidate.table, spec, updates);
+            if (!tableExists(candidate.database, candidate.table)) {
+                return skipped(candidate, "table not found");
+            }
+            const rows = readRows(candidate.database, candidate.table);
+            const updates = rows
+                .map((row) => updateForRow(row, spec))
+                .filter((update) => update !== undefined);
+            if (options.write && updates.length > 0) {
+                if (!options.backupDir) {
+                    throw new Error("backupDir is required when writing SQLite changes");
+                }
+                backupSqlite(codexHome, options.backupDir, candidate.database);
+                applyUpdates(candidate.database, candidate.table, spec, updates);
+            }
+            return {
+                database: candidate.database,
+                table: candidate.table,
+                scannedRows: rows.length,
+                matchedRows: updates.length,
+                changedRows: updates.length,
+                skipped: false,
+            };
         }
-        return {
-            database: candidate.database,
-            table: candidate.table,
-            scannedRows: rows.length,
-            matchedRows: updates.length,
-            changedRows: updates.length,
-            skipped: false,
-        };
+        catch (error) {
+            if (options.write) {
+                throw error;
+            }
+            return skipped(candidate, sqliteErrorMessage(error));
+        }
     });
 }
 export function providerCounts(codexHome) {
@@ -116,15 +150,20 @@ function aggregateRows(codexHome) {
     const rows = [];
     const seen = new Set();
     for (const candidate of discoverSqliteCandidates(codexHome)) {
-        if (!fs.existsSync(candidate.database) || !tableExists(candidate.database, candidate.table)) {
-            continue;
-        }
-        for (const row of readRows(candidate.database, candidate.table)) {
-            const key = `${row.id}:${row.cwd}:${row.model_provider}`;
-            if (!seen.has(key)) {
-                seen.add(key);
-                rows.push(row);
+        try {
+            if (!fs.existsSync(candidate.database) || !tableExists(candidate.database, candidate.table)) {
+                continue;
             }
+            for (const row of readRows(candidate.database, candidate.table)) {
+                const key = `${row.id}:${row.cwd}:${row.model_provider}`;
+                if (!seen.has(key)) {
+                    seen.add(key);
+                    rows.push(row);
+                }
+            }
+        }
+        catch {
+            continue;
         }
     }
     return rows;
@@ -207,6 +246,12 @@ function skipped(candidate, reason) {
         skipped: true,
         reason,
     };
+}
+function sqliteErrorMessage(error) {
+    if (!(error instanceof Error)) {
+        return String(error);
+    }
+    return error.message.replace(/\s+/g, " ").trim();
 }
 function sqlString(value) {
     return `'${value.replaceAll("'", "''")}'`;

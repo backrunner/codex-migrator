@@ -12,6 +12,11 @@ It supports two common moves:
 The tool updates Codex rollout JSONL files and SQLite thread catalogs. Migration
 commands are dry-runs by default. Nothing is written unless `--write` is passed.
 
+Human output uses a lightweight colored TUI with status labels, tables, samples,
+and next-step hints. Use `--json` for stable machine-readable output. Set
+`NO_COLOR=1` to disable colors or `FORCE_COLOR=1` to force ANSI colors in
+non-TTY output.
+
 ## Platform Support
 
 Supported runtime targets:
@@ -244,6 +249,11 @@ created with SQLite `vacuum into` so committed WAL changes are included.
 
 If `--codex-home` points to a missing directory, write mode returns an error
 result and does not create that directory.
+
+Before a write migration that includes SQLite, the CLI preflights the SQLite
+catalogs. If a database is locked or unreadable, the command stops before any
+JSONL files are changed. Use `--no-sqlite` only when you intentionally want to
+skip SQLite catalog updates.
 
 ## JSON Output
 

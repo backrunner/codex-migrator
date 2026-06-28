@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { discoverSessionFiles, migrateJsonlFiles } from "./jsonl.js";
 import { ensureDir, normalizeDir } from "./paths.js";
-import { migrateSqlite } from "./sqlite.js";
+import { migrateSqlite, sqliteWritePreflight } from "./sqlite.js";
 import type { ExecutionOptions, MigrationResult, MigrationSpec } from "./types.js";
 
 export function runMigration(
@@ -23,6 +23,21 @@ export function runMigration(
       sqlite: [],
       warnings,
     };
+  }
+
+  if (options.write && options.includeSqlite) {
+    const sqliteErrors = sqliteWritePreflight(codexHome);
+    if (sqliteErrors.length > 0) {
+      return {
+        ok: false,
+        dryRun: false,
+        action: spec,
+        codexHome,
+        jsonl: emptyJsonlResult(),
+        sqlite: [],
+        warnings: sqliteErrors.map((error) => `SQLite is not ready for migration: ${error}`),
+      };
+    }
   }
 
   const backupDir = options.write ? createBackupDir(codexHome) : undefined;

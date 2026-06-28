@@ -1,3 +1,4 @@
+import { status } from "./tui.js";
 export function printJson(value) {
     process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -12,6 +13,6 @@ export function printError(error, json) {
         });
         return;
     }
-    process.stderr.write(`Error: ${message}\n`);
+    process.stderr.write(`${status("error", message)}\n`);
 }
 //# sourceMappingURL=output.js.map

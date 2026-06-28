@@ -6,6 +6,7 @@ interface SqliteCandidate {
 export declare function sqlite3Available(): boolean;
 export declare function discoverSqliteCandidates(codexHome: string): SqliteCandidate[];
 export declare function inspectSqlite(codexHome: string): SqliteMigrationResult[];
+export declare function sqliteWritePreflight(codexHome: string): string[];
 export declare function migrateSqlite(codexHome: string, spec: MigrationSpec, options: {
     write: boolean;
     backupDir?: string;

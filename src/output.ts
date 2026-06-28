@@ -1,3 +1,5 @@
+import { status } from "./tui.js";
+
 export function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
@@ -15,5 +17,5 @@ export function printError(error: unknown, json: boolean): void {
     return;
   }
 
-  process.stderr.write(`Error: ${message}\n`);
+  process.stderr.write(`${status("error", message)}\n`);
 }

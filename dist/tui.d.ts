@@ -1,0 +1,21 @@
+type Style = (value: string) => string;
+export declare const tui: {
+    bold: Style;
+    dim: Style;
+    red: Style;
+    green: Style;
+    yellow: Style;
+    blue: Style;
+    magenta: Style;
+    cyan: Style;
+    gray: Style;
+};
+export declare function status(kind: "success" | "dry" | "warning" | "error" | "info", text: string): string;
+export declare function command(value: string): string;
+export declare function pathValue(value: string): string;
+export declare function section(title: string): string;
+export declare function hint(text: string): string;
+export declare function warnLine(text: string): string;
+export declare function table(rows: string[][], headers?: string[]): string;
+export declare function list(items: string[]): string;
+export {};

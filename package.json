@@ -17,7 +17,20 @@
     "migration",
     "cli"
   ],
-  "author": "",
+  "homepage": "https://github.com/backrunner/codex-migrator#readme",
+  "bugs": {
+    "url": "https://github.com/backrunner/codex-migrator/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/backrunner/codex-migrator.git"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "BackRunner <dev@backrunner.top>",
   "license": "MIT",
   "packageManager": "pnpm@10.24.0",
   "dependencies": {

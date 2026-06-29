@@ -39,6 +39,8 @@ export interface ExecutionOptions {
   includeJsonl: boolean;
   includeSqlite: boolean;
   json: boolean;
+  jsonlPlan?: JsonlMigrationPlan;
+  onJsonlPlan?: (plan: JsonlMigrationPlan) => void;
   onProgress?: (event: ProgressEvent) => void;
 }
 
@@ -72,6 +74,46 @@ export interface JsonlMigrationResult {
     lines: number;
   }>;
   samples: FileChangeSample[];
+}
+
+export interface JsonlFileFingerprint {
+  file: string;
+  archived: boolean;
+  size: bigint;
+  mtimeNs: bigint;
+}
+
+export interface PlannedJsonlSession {
+  session: SessionSummary;
+  fingerprint: JsonlFileFingerprint;
+}
+
+export interface PlannedJsonlLineChange {
+  index: number;
+  line: string;
+}
+
+export interface PlannedJsonlFileChange {
+  session: SessionSummary;
+  fingerprint: JsonlFileFingerprint;
+  changedLines: number;
+  lineChanges: PlannedJsonlLineChange[];
+  projectChanges: Array<{
+    fromCwd: string;
+    toCwd: string;
+    lines: number;
+  }>;
+  sample: FileChangeSample;
+}
+
+export interface JsonlMigrationPlan {
+  version: 1;
+  codexHome: string;
+  includeArchived: boolean;
+  action: MigrationSpec;
+  sessions: PlannedJsonlSession[];
+  changes: PlannedJsonlFileChange[];
+  result: JsonlMigrationResult;
 }
 
 export interface ThreadProjectHint {

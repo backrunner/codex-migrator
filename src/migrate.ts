@@ -1,11 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { migrateConfigToml } from "./config.js";
-import { discoverSessionFiles, migrateJsonlFiles } from "./jsonl.js";
+import { applyJsonlPlan, discoverSessionFiles, migrateJsonlFiles, validateJsonlPlan } from "./jsonl.js";
 import { ensureDir, normalizeDir } from "./paths.js";
 import { migrateSqlite, sqliteWritePreflight } from "./sqlite.js";
 import { migrateJsonState } from "./state.js";
-import type { ExecutionOptions, MigrationResult, MigrationSpec, ProjectMigrationSummary } from "./types.js";
+import type { ExecutionOptions, JsonlMigrationPlan, MigrationResult, MigrationSpec, ProjectMigrationSummary } from "./types.js";
 
 export function runMigration(
   spec: MigrationSpec,
@@ -48,18 +48,55 @@ export function runMigration(
     }
   }
 
-  const backupDir = options.write ? createBackupDir(codexHome) : undefined;
-  const sessions = options.includeJsonl
-    ? discoverSessionFiles(codexHome, options.includeArchived, options.onProgress)
-    : [];
+  if (options.write && options.includeJsonl && options.jsonlPlan) {
+    validateJsonlPlan(options.jsonlPlan, codexHome, options.includeArchived, spec);
+  }
 
+  const backupDir = options.write ? createBackupDir(codexHome) : undefined;
+
+  let jsonlPlan: JsonlMigrationPlan | undefined = options.jsonlPlan;
   const jsonl = options.includeJsonl
-    ? migrateJsonlFiles(sessions, spec, {
-        write: options.write,
-        codexHome,
-        backupDir,
-        onProgress: options.onProgress,
-      })
+    ? (() => {
+        if (options.write && jsonlPlan) {
+          if (!backupDir) {
+            throw new Error("backupDir is required when writing JSONL changes");
+          }
+
+          return applyJsonlPlan(jsonlPlan, {
+            codexHome,
+            backupDir,
+            onProgress: options.onProgress,
+          });
+        }
+
+        const sessions = discoverSessionFiles(codexHome, options.includeArchived, options.onProgress);
+        const result = migrateJsonlFiles(sessions, spec, {
+          write: false,
+          codexHome,
+          includeArchived: options.includeArchived,
+          backupDir,
+          onPlan: (plan) => {
+            jsonlPlan = plan;
+            options.onJsonlPlan?.(plan);
+          },
+          onProgress: options.onProgress,
+        });
+
+        if (options.write) {
+          if (!jsonlPlan || !backupDir) {
+            throw new Error("JSONL migration plan is required when writing JSONL changes");
+          }
+
+          validateJsonlPlan(jsonlPlan, codexHome, options.includeArchived, spec);
+          return applyJsonlPlan(jsonlPlan, {
+            codexHome,
+            backupDir,
+            onProgress: options.onProgress,
+          });
+        }
+
+        return result;
+      })()
     : {
         scannedFiles: 0,
         matchedFiles: 0,

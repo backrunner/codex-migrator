@@ -72,6 +72,121 @@ test("write project migration updates JSONL and creates a backup", () => {
   assert.equal(fs.readFileSync(backupFile, "utf8"), original);
 });
 
+test("write project migration can reuse a preview JSONL plan", () => {
+  const codexHome = makeTempCodexHome();
+  const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const file = path.join(sessionDir, "rollout-test.jsonl");
+  const original = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: { id: "thread-1", cwd: "/old/app", model_provider: "openai" },
+    }),
+    JSON.stringify({
+      timestamp: "now",
+      type: "turn_context",
+      payload: { cwd: "/old/app/packages/lib", workspace_roots: ["/old/app"] },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(file, original);
+
+  let jsonlPlan;
+  const preview = runMigration(
+    { mode: "project", projectName: "app", targetDir: "/new/app" },
+    {
+      write: false,
+      codexHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+      onJsonlPlan: (plan) => {
+        jsonlPlan = plan;
+      },
+    },
+  );
+
+  assert.equal(preview.jsonl.changedFiles, 1);
+  assert.equal(jsonlPlan?.changes.length, 1);
+
+  const result = runMigration(
+    { mode: "project", projectName: "app", targetDir: "/new/app" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+      jsonlPlan,
+    },
+  );
+
+  assert.equal(result.jsonl.changedFiles, 1);
+  const [meta, turn] = readJsonl(file);
+  assert.equal(meta.payload.cwd, "/new/app");
+  assert.equal(turn.payload.cwd, "/new/app/packages/lib");
+  assert.deepEqual(turn.payload.workspace_roots, ["/new/app"]);
+});
+
+test("write project migration rejects a stale preview JSONL plan", () => {
+  const codexHome = makeTempCodexHome();
+  const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");
+  fs.mkdirSync(sessionDir, { recursive: true });
+
+  const file = path.join(sessionDir, "rollout-test.jsonl");
+  fs.writeFileSync(
+    file,
+    [
+      JSON.stringify({
+        timestamp: "now",
+        type: "session_meta",
+        payload: { id: "thread-1", cwd: "/old/app", model_provider: "openai" },
+      }),
+      "",
+    ].join("\n"),
+  );
+
+  let jsonlPlan;
+  runMigration(
+    { mode: "project", projectName: "app", targetDir: "/new/app" },
+    {
+      write: false,
+      codexHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+      onJsonlPlan: (plan) => {
+        jsonlPlan = plan;
+      },
+    },
+  );
+
+  fs.appendFileSync(file, "\n");
+
+  assert.throws(
+    () =>
+      runMigration(
+        { mode: "project", projectName: "app", targetDir: "/new/app" },
+        {
+          write: true,
+          codexHome,
+          includeArchived: true,
+          includeJsonl: true,
+          includeSqlite: false,
+          json: true,
+          jsonlPlan,
+        },
+      ),
+    /JSONL session files changed after preview/,
+  );
+  assert.equal(fs.existsSync(path.join(codexHome, "backups")), false);
+});
+
 test("project migration samples are grouped one per project", () => {
   const codexHome = makeTempCodexHome();
   const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");

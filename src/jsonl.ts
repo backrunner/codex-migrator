@@ -4,20 +4,28 @@ import {
   ensureDir,
   firstAncestorWithBasename,
   firstPathUnderParent,
+  historyBasename,
   isHistoryPathAbsolute,
   isSameOrInside,
+  normalizeHistoryPath,
   relativeFromCodexHome,
   remapPathPrefix,
 } from "./paths.js";
 import type {
   FileChangeSample,
   JsonObject,
+  JsonlFileFingerprint,
+  JsonlMigrationPlan,
   JsonlMigrationResult,
   MigrationSpec,
+  PlannedJsonlFileChange,
+  PlannedJsonlLineChange,
+  PlannedJsonlSession,
   SessionSummary,
 } from "./types.js";
 
 const MAX_SAMPLES = 10;
+const JSONL_PLAN_VERSION = 1;
 
 export function discoverSessionFiles(
   codexHome: string,
@@ -28,31 +36,24 @@ export function discoverSessionFiles(
     total: number;
     label: string;
   }) => void,
-): SessionSummary[] {
-  const roots: Array<{ dir: string; archived: boolean }> = [
-    { dir: path.join(codexHome, "sessions"), archived: false },
-  ];
+): PlannedJsonlSession[] {
+  const fingerprints = discoverJsonlFingerprints(codexHome, includeArchived);
 
-  if (includeArchived) {
-    roots.push({ dir: path.join(codexHome, "archived_sessions"), archived: true });
-  }
-
-  const files = roots.flatMap(({ dir, archived }) =>
-    walkJsonl(dir).map((file) => ({ archived, file })),
-  );
-
-  return files.map(({ file, archived }, index) => {
+  return fingerprints.map((fingerprint, index) => {
     onProgress?.({
       surface: "scan",
       current: index + 1,
-      total: files.length,
-      label: relativeFromCodexHome(codexHome, file),
+      total: fingerprints.length,
+      label: relativeFromCodexHome(codexHome, fingerprint.file),
     });
 
     return {
-      ...readSessionSummary(file),
-      archived,
-      file,
+      session: {
+        ...readSessionSummary(fingerprint.file),
+        archived: fingerprint.archived,
+        file: fingerprint.file,
+      },
+      fingerprint,
     };
   });
 }
@@ -61,13 +62,43 @@ export function countSessionFiles(dir: string): number {
   return walkJsonl(dir).length;
 }
 
-export function migrateJsonlFiles(
-  sessions: SessionSummary[],
+export function validateJsonlPlan(
+  plan: JsonlMigrationPlan,
+  codexHome: string,
+  includeArchived: boolean,
   spec: MigrationSpec,
+): void {
+  if (plan.version !== JSONL_PLAN_VERSION) {
+    throw new Error("JSONL migration preview is from an unsupported plan version");
+  }
+
+  if (plan.codexHome !== codexHome || plan.includeArchived !== includeArchived) {
+    throw new Error("JSONL migration preview does not match the current migration options");
+  }
+
+  if (!migrationSpecsEqual(plan.action, spec)) {
+    throw new Error("JSONL migration preview does not match the current migration action");
+  }
+
+  const currentFingerprints = discoverJsonlFingerprints(codexHome, includeArchived);
+  const currentByFile = new Map(currentFingerprints.map((fingerprint) => [fingerprint.file, fingerprint]));
+  if (currentByFile.size !== plan.sessions.length) {
+    throw new Error("JSONL session files changed after preview; run the migration again");
+  }
+
+  for (const planned of plan.sessions) {
+    const current = currentByFile.get(planned.session.file);
+    if (!current || !sameFingerprint(current, planned.fingerprint)) {
+      throw new Error("JSONL session files changed after preview; run the migration again");
+    }
+  }
+}
+
+export function applyJsonlPlan(
+  plan: JsonlMigrationPlan,
   options: {
-    write: boolean;
     codexHome: string;
-    backupDir?: string;
+    backupDir: string;
     onProgress?: (event: {
       surface: "jsonl";
       current: number;
@@ -76,6 +107,44 @@ export function migrateJsonlFiles(
     }) => void;
   },
 ): JsonlMigrationResult {
+  plan.changes.forEach((change, index) => {
+    options.onProgress?.({
+      surface: "jsonl",
+      current: index + 1,
+      total: plan.changes.length,
+      label: relativeFromCodexHome(options.codexHome, change.session.file),
+    });
+
+    const content = fs.readFileSync(change.session.file, "utf8");
+    const nextContent = applyLineChanges(content, change.lineChanges);
+    backupFile(options.codexHome, options.backupDir, change.session.file);
+    fs.writeFileSync(change.session.file, nextContent);
+  });
+
+  return plan.result;
+}
+
+export function migrateJsonlFiles(
+  sessions: PlannedJsonlSession[],
+  spec: MigrationSpec,
+  options: {
+    write: boolean;
+    codexHome: string;
+    includeArchived: boolean;
+    backupDir?: string;
+    onPlan?: (plan: JsonlMigrationPlan) => void;
+    onProgress?: (event: {
+      surface: "jsonl";
+      current: number;
+      total: number;
+      label: string;
+    }) => void;
+  },
+): JsonlMigrationResult {
+  if (options.write) {
+    throw new Error("migrateJsonlFiles writes must use applyJsonlPlan");
+  }
+
   const result: JsonlMigrationResult = {
     scannedFiles: sessions.length,
     matchedFiles: 0,
@@ -88,8 +157,9 @@ export function migrateJsonlFiles(
   const sampleKeys = new Set<string>();
   const threadHints = new Map<string, { id: string; fromCwd: string; toCwd: string }>();
   const projectChanges = new Map<string, { fromCwd: string; toCwd: string; files: number; lines: number }>();
+  const plannedChanges: PlannedJsonlFileChange[] = [];
 
-  sessions.forEach((session, index) => {
+  sessions.forEach(({ session, fingerprint }, index) => {
     options.onProgress?.({
       surface: "jsonl",
       current: index + 1,
@@ -102,11 +172,12 @@ export function migrateJsonlFiles(
       return;
     }
 
-    const migration = transformJsonlContent(
-      fs.readFileSync(session.file, "utf8"),
-      spec,
-      session,
-    );
+    const content = fs.readFileSync(session.file, "utf8");
+    if (!contentMightContainMigrationTarget(content, spec, session)) {
+      return;
+    }
+
+    const migration = transformJsonlContent(content, spec, session);
 
     if (migration.changedLines === 0) {
       return;
@@ -137,20 +208,29 @@ export function migrateJsonlFiles(
       result.samples.push(migration.sample);
     }
 
-    if (options.write) {
-      if (!options.backupDir) {
-        throw new Error("backupDir is required when writing JSONL changes");
-      }
-
-      backupFile(options.codexHome, options.backupDir, session.file);
-      fs.writeFileSync(session.file, migration.content);
-    }
+    plannedChanges.push({
+      session,
+      fingerprint,
+      changedLines: migration.changedLines,
+      lineChanges: migration.lineChanges,
+      projectChanges: migration.projectChanges,
+      sample: migration.sample,
+    });
   });
 
   result.threadProjectHints = [...threadHints.values()].sort((a, b) => a.id.localeCompare(b.id));
   result.projectChanges = [...projectChanges.values()].sort((a, b) =>
     a.fromCwd.localeCompare(b.fromCwd),
   );
+  options.onPlan?.({
+    version: JSONL_PLAN_VERSION,
+    codexHome: options.codexHome,
+    includeArchived: options.includeArchived,
+    action: spec,
+    sessions,
+    changes: plannedChanges,
+    result,
+  });
   return result;
 }
 
@@ -161,18 +241,24 @@ export function transformJsonlContent(
 ): {
   content: string;
   changedLines: number;
+  lineChanges: PlannedJsonlLineChange[];
   projectChanges: Array<{ fromCwd: string; toCwd: string; lines: number }>;
   sample: FileChangeSample;
 } {
   const lines = content.split("\n");
+  const lineChanges: PlannedJsonlLineChange[] = [];
   let changedLines = 0;
   let firstFromProvider: string | undefined;
   let firstFromCwd: string | undefined;
   let firstToCwd: string | undefined;
   const projectChanges = new Map<string, { fromCwd: string; toCwd: string; lines: number }>();
 
-  const transformed = lines.map((line) => {
+  const transformed = lines.map((line, index) => {
     if (line.trim() === "") {
+      return line;
+    }
+
+    if (!lineMightContainMigrationTarget(line, spec, session)) {
       return line;
     }
 
@@ -243,7 +329,9 @@ export function transformJsonlContent(
     }
 
     changedLines += 1;
-    return JSON.stringify(parsed);
+    const nextLine = JSON.stringify(parsed);
+    lineChanges.push({ index, line: nextLine });
+    return nextLine;
   });
 
   const sample: FileChangeSample = {
@@ -263,9 +351,195 @@ export function transformJsonlContent(
   return {
     content: transformed.join("\n"),
     changedLines,
+    lineChanges,
     projectChanges: [...projectChanges.values()],
     sample,
   };
+}
+
+function discoverJsonlFingerprints(codexHome: string, includeArchived: boolean): JsonlFileFingerprint[] {
+  const roots: Array<{ dir: string; archived: boolean }> = [
+    { dir: path.join(codexHome, "sessions"), archived: false },
+  ];
+
+  if (includeArchived) {
+    roots.push({ dir: path.join(codexHome, "archived_sessions"), archived: true });
+  }
+
+  return roots.flatMap(({ dir, archived }) =>
+    walkJsonl(dir).map((file) => fingerprintJsonlFile(file, archived)),
+  );
+}
+
+function fingerprintJsonlFile(file: string, archived: boolean): JsonlFileFingerprint {
+  const stat = fs.statSync(file, { bigint: true });
+  return {
+    file,
+    archived,
+    size: stat.size,
+    mtimeNs: stat.mtimeNs,
+  };
+}
+
+function sameFingerprint(left: JsonlFileFingerprint, right: JsonlFileFingerprint): boolean {
+  return (
+    left.file === right.file &&
+    left.archived === right.archived &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs
+  );
+}
+
+function applyLineChanges(content: string, changes: PlannedJsonlLineChange[]): string {
+  if (changes.length === 0) {
+    return content;
+  }
+
+  const lines = content.split("\n");
+  for (const change of changes) {
+    lines[change.index] = change.line;
+  }
+
+  return lines.join("\n");
+}
+
+function migrationSpecsEqual(left: MigrationSpec, right: MigrationSpec): boolean {
+  if (left.mode !== right.mode) {
+    return false;
+  }
+
+  if (left.mode === "provider" && right.mode === "provider") {
+    return left.targetProvider === right.targetProvider && left.fromProvider === right.fromProvider;
+  }
+
+  if (left.mode === "project" && right.mode === "project") {
+    return (
+      left.projectName === right.projectName &&
+      left.targetDir === right.targetDir &&
+      left.fromDir === right.fromDir
+    );
+  }
+
+  return (
+    left.mode === "projects" &&
+    right.mode === "projects" &&
+    left.originalDir === right.originalDir &&
+    left.targetDir === right.targetDir
+  );
+}
+
+function contentMightContainMigrationTarget(
+  content: string,
+  spec: MigrationSpec,
+  session: SessionSummary,
+): boolean {
+  if (spec.mode === "provider") {
+    return true;
+  }
+
+  if (!hasProjectPathPayloadKey(content)) {
+    return false;
+  }
+
+  if (spec.mode === "projects") {
+    return contentMayContainPath(content, spec.originalDir, false);
+  }
+
+  return projectPrefilterCandidates(spec, session).some(({ value, includeBasename }) =>
+    contentMayContainPath(content, value, includeBasename),
+  );
+}
+
+function lineMightContainMigrationTarget(
+  line: string,
+  spec: MigrationSpec,
+  session: SessionSummary,
+): boolean {
+  if (spec.mode === "provider") {
+    return true;
+  }
+
+  if (!hasProjectPathPayloadKey(line)) {
+    return false;
+  }
+
+  if (spec.mode === "projects") {
+    return contentMayContainPath(line, spec.originalDir, false);
+  }
+
+  return projectPrefilterCandidates(spec, session).some(({ value, includeBasename }) =>
+    contentMayContainPath(line, value, includeBasename),
+  );
+}
+
+function hasProjectPathPayloadKey(content: string): boolean {
+  return content.includes("\"cwd\"") || content.includes("\"workspace_roots\"");
+}
+
+function projectPrefilterCandidates(
+  spec: MigrationSpec,
+  session: SessionSummary,
+): Array<{ value: string; includeBasename: boolean }> {
+  if (spec.mode !== "project") {
+    return [];
+  }
+
+  if (spec.fromDir) {
+    return [{ value: spec.fromDir, includeBasename: false }];
+  }
+
+  if (isHistoryPathAbsolute(spec.projectName)) {
+    return [{ value: spec.projectName, includeBasename: false }];
+  }
+
+  const sessionSource = session.cwd ? firstAncestorWithBasename(session.cwd, spec.projectName) : undefined;
+  return [
+    sessionSource ? { value: sessionSource, includeBasename: false } : undefined,
+    { value: spec.projectName, includeBasename: true },
+  ].filter((candidate): candidate is { value: string; includeBasename: boolean } => Boolean(candidate));
+}
+
+function contentMayContainPath(content: string, candidate: string, includeBasename: boolean): boolean {
+  const normalized = normalizeHistoryPath(candidate);
+  const needles = new Set([candidate, normalized, jsonStringFragment(candidate), jsonStringFragment(normalized)]);
+
+  if (includeBasename) {
+    const basename = historyBasename(normalized);
+    needles.add(basename);
+    needles.add(jsonStringFragment(basename));
+  }
+
+  for (const needle of needles) {
+    if (!needle) {
+      continue;
+    }
+
+    if (content.includes(needle)) {
+      return true;
+    }
+
+    const slashEscapedNeedle = needle.replaceAll("/", "\\/");
+    if (slashEscapedNeedle !== needle && content.includes(slashEscapedNeedle)) {
+      return true;
+    }
+  }
+
+  const lowerContent = content.toLowerCase();
+  for (const needle of needles) {
+    if (!needle) {
+      continue;
+    }
+
+    if (lowerContent.includes(needle.toLowerCase())) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function jsonStringFragment(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
 }
 
 function addProjectChange(

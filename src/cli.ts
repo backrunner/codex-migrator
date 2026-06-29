@@ -18,6 +18,7 @@ import type {
   BackupListResult,
   ExecutionOptions,
   GlobalOptions,
+  JsonlMigrationPlan,
   MigrationResult,
   MigrationSpec,
   RestoreResult,
@@ -235,6 +236,8 @@ function executionOptions(
   },
   write = false,
   onProgress?: ExecutionOptions["onProgress"],
+  jsonlPlan?: JsonlMigrationPlan,
+  onJsonlPlan?: (plan: JsonlMigrationPlan) => void,
 ): ExecutionOptions {
   return {
     write,
@@ -243,6 +246,8 @@ function executionOptions(
     includeJsonl: commandOptions.jsonl !== false,
     includeSqlite: commandOptions.sqlite !== false,
     json: global.json,
+    jsonlPlan,
+    onJsonlPlan,
     onProgress,
   };
 }
@@ -259,10 +264,16 @@ async function runMigrationCommand(
     title: "Preparing migration preview",
     done: "Preview ready",
   });
-  const preview = runMigration(spec, executionOptions(global, commandOptions, false, previewProgress));
+  let jsonlPlan: JsonlMigrationPlan | undefined;
+  const preview = runMigration(
+    spec,
+    executionOptions(global, commandOptions, false, previewProgress, undefined, (plan) => {
+      jsonlPlan = plan;
+    }),
+  );
   previewProgress.finish();
   if (global.json) {
-    await runJsonMigrationCommand(global, spec, commandOptions, preview);
+    await runJsonMigrationCommand(global, spec, commandOptions, preview, jsonlPlan);
     return;
   }
 
@@ -282,7 +293,10 @@ async function runMigrationCommand(
     title: "Applying migration",
     done: "Apply phase complete",
   });
-  const applied = runMigration(spec, executionOptions(global, commandOptions, true, applyProgress));
+  const applied = runMigration(
+    spec,
+    executionOptions(global, commandOptions, true, applyProgress, jsonlPlan),
+  );
   applyProgress.finish();
   process.stdout.write("\n");
   printMigration(applied, false);
@@ -296,6 +310,7 @@ async function runJsonMigrationCommand(
     sqlite?: boolean;
   },
   preview: MigrationResult,
+  jsonlPlan?: JsonlMigrationPlan,
 ): Promise<void> {
   if (!canApplyMigration(preview)) {
     printJson({ ...preview, confirmed: false });
@@ -313,7 +328,10 @@ async function runJsonMigrationCommand(
     title: "Applying migration",
     done: "Apply phase complete",
   });
-  const applied = runMigration(spec, executionOptions(global, commandOptions, true, applyProgress));
+  const applied = runMigration(
+    spec,
+    executionOptions(global, commandOptions, true, applyProgress, jsonlPlan),
+  );
   applyProgress.finish();
   printJson({ ...applied, confirmed: true, preview });
 }

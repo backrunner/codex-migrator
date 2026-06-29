@@ -1,0 +1,7 @@
+AGENTS.md
+src/
+test/
+tsconfig.json
+coverage/
+*.log
+.DS_Store

@@ -3,6 +3,7 @@ import path from "node:path";
 import { countSessionFiles } from "./jsonl.js";
 import { normalizeDir } from "./paths.js";
 import { inspectSqlite, projectCounts, providerCounts, sqlite3Available } from "./sqlite.js";
+import { inspectJsonState } from "./state.js";
 import type { DoctorResult } from "./types.js";
 
 export function runDoctor(codexHomeInput: string): DoctorResult {
@@ -20,6 +21,30 @@ export function runDoctor(codexHomeInput: string): DoctorResult {
     warnings.push("sqlite3 is not available; SQLite thread catalog migration will be skipped");
   }
 
+  const sqlite = inspectSqlite(codexHome);
+  const state = inspectJsonState(codexHome);
+  const historyIndex = path.join(codexHome, "history.jsonl");
+  const sessionIndex = path.join(codexHome, "session_index.jsonl");
+  for (const db of sqlite) {
+    if (db.missingRolloutPaths > 0) {
+      warnings.push(
+        `${db.table} has ${db.missingRolloutPaths} thread row(s) whose rollout_path file is missing`,
+      );
+    }
+  }
+
+  const stateThreadRows = sqlite
+    .filter((db) => db.table === "threads" && !db.skipped)
+    .reduce((sum, db) => sum + db.scannedRows, 0);
+  const desktopCatalogRows = sqlite
+    .filter((db) => db.table === "local_thread_catalog" && !db.skipped)
+    .reduce((sum, db) => sum + db.scannedRows, 0);
+  if (stateThreadRows > 0 && desktopCatalogRows === 0) {
+    warnings.push(
+      "Desktop local_thread_catalog is empty while state_5.sqlite has thread rows; run a confirmed project migration to rebuild Desktop history.",
+    );
+  }
+
   return {
     ok: warnings.length === 0,
     codexHome,
@@ -28,6 +53,19 @@ export function runDoctor(codexHomeInput: string): DoctorResult {
       pathSeparator: path.sep,
     },
     sqlite3Available: sqliteAvailable,
+    state,
+    indexFiles: {
+      history: {
+        path: historyIndex,
+        exists: fs.existsSync(historyIndex),
+        entries: countJsonlLines(historyIndex),
+      },
+      sessionIndex: {
+        path: sessionIndex,
+        exists: fs.existsSync(sessionIndex),
+        entries: countJsonlLines(sessionIndex),
+      },
+    },
     sessionsDir: {
       path: sessionsPath,
       exists: fs.existsSync(sessionsPath),
@@ -38,9 +76,22 @@ export function runDoctor(codexHomeInput: string): DoctorResult {
       exists: fs.existsSync(archivedPath),
       files: countSessionFiles(archivedPath),
     },
-    sqlite: inspectSqlite(codexHome),
+    sqlite,
     providers: providerCounts(codexHome),
     projects: projectCounts(codexHome).slice(0, 20),
     warnings,
   };
+}
+
+function countJsonlLines(file: string): number {
+  if (!fs.existsSync(file)) {
+    return 0;
+  }
+
+  const content = fs.readFileSync(file, "utf8").trim();
+  if (!content) {
+    return 0;
+  }
+
+  return content.split("\n").length;
 }

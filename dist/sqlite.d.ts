@@ -1,7 +1,8 @@
-import type { MigrationSpec, SqliteMigrationResult } from "./types.js";
+import type { MigrationSpec, SqliteMigrationResult, ThreadProjectHint } from "./types.js";
+type SqliteTable = "threads" | "local_thread_catalog" | "agent_jobs" | "automations" | "automation_runs";
 interface SqliteCandidate {
     database: string;
-    table: "threads" | "local_thread_catalog";
+    table: SqliteTable;
 }
 export declare function sqlite3Available(): boolean;
 export declare function discoverSqliteCandidates(codexHome: string): SqliteCandidate[];
@@ -10,6 +11,13 @@ export declare function sqliteWritePreflight(codexHome: string): string[];
 export declare function migrateSqlite(codexHome: string, spec: MigrationSpec, options: {
     write: boolean;
     backupDir?: string;
+    threadProjectHints?: ThreadProjectHint[];
+    onProgress?: (event: {
+        surface: "sqlite";
+        current: number;
+        total: number;
+        label: string;
+    }) => void;
 }): SqliteMigrationResult[];
 export declare function providerCounts(codexHome: string): Array<{
     modelProvider: string;

@@ -56,8 +56,14 @@ export function restoreBackup(codexHomeInput, backupInput, options) {
     let sqliteFiles = 0;
     let removedWalFiles = 0;
     const samples = [];
-    for (const file of files) {
+    for (const [index, file] of files.entries()) {
         const relative = path.relative(backupDir, file);
+        options.onProgress?.({
+            surface: "restore",
+            current: index + 1,
+            total: files.length,
+            label: relative,
+        });
         if (relative.startsWith("..") || path.isAbsolute(relative)) {
             warnings.push(`Skipped unsafe backup path: ${file}`);
             continue;

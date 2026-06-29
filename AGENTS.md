@@ -13,7 +13,8 @@ Commander.js.
 ## Migration Safety
 
 - Migration commands must default to dry-run behavior.
-- Destructive writes require an explicit `--write` flag.
+- Destructive writes require the interactive confirmation prompt to be answered
+  with `y`; default input must leave the dry-run unchanged.
 - Any write to Codex JSONL or SQLite state must create a timestamped backup under
   `~/.codex/backups/`.
 - Do not print or snapshot conversation message content in logs, tests, or docs.

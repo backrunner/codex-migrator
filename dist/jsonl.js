@@ -1,19 +1,28 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, historyBasename, isHistoryPathAbsolute, relativeFromCodexHome, remapPathPrefix, sameHistoryPath, } from "./paths.js";
+import { ensureDir, firstAncestorWithBasename, firstPathUnderParent, isHistoryPathAbsolute, isSameOrInside, relativeFromCodexHome, remapPathPrefix, } from "./paths.js";
 const MAX_SAMPLES = 10;
-export function discoverSessionFiles(codexHome, includeArchived) {
+export function discoverSessionFiles(codexHome, includeArchived, onProgress) {
     const roots = [
         { dir: path.join(codexHome, "sessions"), archived: false },
     ];
     if (includeArchived) {
         roots.push({ dir: path.join(codexHome, "archived_sessions"), archived: true });
     }
-    return roots.flatMap(({ dir, archived }) => walkJsonl(dir).map((file) => ({
-        ...readSessionSummary(file),
-        archived,
-        file,
-    })));
+    const files = roots.flatMap(({ dir, archived }) => walkJsonl(dir).map((file) => ({ archived, file })));
+    return files.map(({ file, archived }, index) => {
+        onProgress?.({
+            surface: "scan",
+            current: index + 1,
+            total: files.length,
+            label: relativeFromCodexHome(codexHome, file),
+        });
+        return {
+            ...readSessionSummary(file),
+            archived,
+            file,
+        };
+    });
 }
 export function countSessionFiles(dir) {
     return walkJsonl(dir).length;
@@ -24,20 +33,49 @@ export function migrateJsonlFiles(sessions, spec, options) {
         matchedFiles: 0,
         changedFiles: 0,
         changedLines: 0,
+        threadProjectHints: [],
+        projectChanges: [],
         samples: [],
     };
-    for (const session of sessions) {
-        if (!sessionMatches(session, spec)) {
-            continue;
+    const sampleKeys = new Set();
+    const threadHints = new Map();
+    const projectChanges = new Map();
+    sessions.forEach((session, index) => {
+        options.onProgress?.({
+            surface: "jsonl",
+            current: index + 1,
+            total: sessions.length,
+            label: relativeFromCodexHome(options.codexHome, session.file),
+        });
+        const shouldScanContent = spec.mode === "project" || spec.mode === "projects";
+        if (!shouldScanContent && !sessionMatches(session, spec)) {
+            return;
         }
-        result.matchedFiles += 1;
         const migration = transformJsonlContent(fs.readFileSync(session.file, "utf8"), spec, session);
         if (migration.changedLines === 0) {
-            continue;
+            return;
         }
+        result.matchedFiles += 1;
         result.changedFiles += 1;
         result.changedLines += migration.changedLines;
-        if (result.samples.length < MAX_SAMPLES) {
+        for (const change of migration.projectChanges) {
+            const key = `${change.fromCwd}\0${change.toCwd}`;
+            const current = projectChanges.get(key) ?? { ...change, files: 0, lines: 0 };
+            current.files += 1;
+            current.lines += change.lines;
+            projectChanges.set(key, current);
+        }
+        if (session.id && migration.projectChanges.length > 0) {
+            const firstProjectChange = migration.projectChanges[0];
+            threadHints.set(session.id, {
+                id: session.id,
+                fromCwd: firstProjectChange.fromCwd,
+                toCwd: firstProjectChange.toCwd,
+            });
+        }
+        const sampleKey = fileChangeSampleKey(migration.sample, spec);
+        if (!sampleKeys.has(sampleKey) && result.samples.length < MAX_SAMPLES) {
+            sampleKeys.add(sampleKey);
             result.samples.push(migration.sample);
         }
         if (options.write) {
@@ -47,7 +85,9 @@ export function migrateJsonlFiles(sessions, spec, options) {
             backupFile(options.codexHome, options.backupDir, session.file);
             fs.writeFileSync(session.file, migration.content);
         }
-    }
+    });
+    result.threadProjectHints = [...threadHints.values()].sort((a, b) => a.id.localeCompare(b.id));
+    result.projectChanges = [...projectChanges.values()].sort((a, b) => a.fromCwd.localeCompare(b.fromCwd));
     return result;
 }
 export function transformJsonlContent(content, spec, session) {
@@ -56,6 +96,7 @@ export function transformJsonlContent(content, spec, session) {
     let firstFromProvider;
     let firstFromCwd;
     let firstToCwd;
+    const projectChanges = new Map();
     const transformed = lines.map((line) => {
         if (line.trim() === "") {
             return line;
@@ -89,6 +130,7 @@ export function transformJsonlContent(content, spec, session) {
                 if (nextCwd && nextCwd !== cwd) {
                     firstFromCwd ??= cwd;
                     firstToCwd ??= nextCwd;
+                    addProjectChange(projectChanges, spec, cwd, nextCwd);
                     payload.cwd = nextCwd;
                     changed = true;
                 }
@@ -99,7 +141,11 @@ export function transformJsonlContent(content, spec, session) {
                     if (typeof root !== "string") {
                         return root;
                     }
-                    return remapWorkspaceRoot(root, spec, session) ?? root;
+                    const nextRoot = remapWorkspaceRoot(root, spec, session);
+                    if (nextRoot && nextRoot !== root) {
+                        addProjectChange(projectChanges, spec, root, nextRoot);
+                    }
+                    return nextRoot ?? root;
                 });
                 if (JSON.stringify(nextRoots) !== JSON.stringify(workspaceRoots)) {
                     payload.workspace_roots = nextRoots;
@@ -122,14 +168,35 @@ export function transformJsonlContent(content, spec, session) {
         sample.toProvider = spec.targetProvider;
     }
     else {
-        sample.fromCwd = firstFromCwd ?? session.cwd;
-        sample.toCwd = firstToCwd;
+        const projectSample = projectSampleMapping(spec, session);
+        sample.fromCwd = projectSample?.fromCwd ?? firstFromCwd ?? session.cwd;
+        sample.toCwd = projectSample?.toCwd ?? firstToCwd;
     }
     return {
         content: transformed.join("\n"),
         changedLines,
+        projectChanges: [...projectChanges.values()],
         sample,
     };
+}
+function addProjectChange(changes, spec, fromCwd, toCwd) {
+    if (spec.mode === "provider") {
+        return;
+    }
+    const roots = projectChangeRoots(spec, fromCwd, toCwd);
+    const key = `${roots.fromCwd}\0${roots.toCwd}`;
+    const current = changes.get(key) ?? { ...roots, lines: 0 };
+    current.lines += 1;
+    changes.set(key, current);
+}
+function projectChangeRoots(spec, fromCwd, toCwd) {
+    if (spec.mode === "projects") {
+        const fromRoot = firstPathUnderParent(fromCwd, spec.originalDir);
+        const toRoot = fromRoot ? remapPathPrefix(fromRoot, spec.originalDir, spec.targetDir) : undefined;
+        return fromRoot && toRoot ? { fromCwd: fromRoot, toCwd: toRoot } : { fromCwd, toCwd };
+    }
+    const fromRoot = projectSourceDirForPath(spec, fromCwd) ?? fromCwd;
+    return { fromCwd: fromRoot, toCwd: spec.targetDir };
 }
 export function readSessionSummary(file) {
     const fd = fs.openSync(file, "r");
@@ -187,36 +254,78 @@ export function sessionMatches(session, spec) {
         return false;
     }
     if (spec.mode === "project") {
-        if (spec.fromDir) {
-            return sameHistoryPath(session.cwd, spec.fromDir);
-        }
-        if (isHistoryPathAbsolute(spec.projectName)) {
-            return sameHistoryPath(session.cwd, spec.projectName);
-        }
-        return historyBasename(session.cwd) === spec.projectName;
+        const sourceDir = projectSourceDir(spec, session);
+        return sourceDir ? isSameOrInside(session.cwd, sourceDir) : false;
     }
     return remapPathPrefix(session.cwd, spec.originalDir, spec.targetDir) !== undefined;
+}
+export function projectSourceDir(spec, session) {
+    if (spec.mode !== "project") {
+        return undefined;
+    }
+    if (spec.fromDir) {
+        return spec.fromDir;
+    }
+    if (isHistoryPathAbsolute(spec.projectName)) {
+        return spec.projectName;
+    }
+    if (!session.cwd) {
+        return undefined;
+    }
+    return projectSourceDirForPath(spec, session.cwd);
+}
+function projectSourceDirForPath(spec, candidate) {
+    if (spec.mode !== "project") {
+        return undefined;
+    }
+    if (spec.fromDir) {
+        return spec.fromDir;
+    }
+    if (isHistoryPathAbsolute(spec.projectName)) {
+        return spec.projectName;
+    }
+    return firstAncestorWithBasename(candidate, spec.projectName);
+}
+function projectSampleMapping(spec, session) {
+    if (!session.cwd || spec.mode === "provider") {
+        return undefined;
+    }
+    if (spec.mode === "projects") {
+        const fromCwd = firstPathUnderParent(session.cwd, spec.originalDir);
+        const toCwd = fromCwd ? remapPathPrefix(fromCwd, spec.originalDir, spec.targetDir) : undefined;
+        return fromCwd && toCwd ? { fromCwd, toCwd } : undefined;
+    }
+    const fromCwd = projectSourceDir(spec, session);
+    return fromCwd ? { fromCwd, toCwd: spec.targetDir } : undefined;
+}
+function fileChangeSampleKey(sample, spec) {
+    if (spec.mode === "provider") {
+        return `provider:${sample.id ?? sample.file}`;
+    }
+    return `project:${sample.fromCwd ?? sample.file}`;
 }
 function remapCwd(cwd, spec, session) {
     if (spec.mode === "projects") {
         return remapPathPrefix(cwd, spec.originalDir, spec.targetDir);
     }
-    if (spec.mode !== "project" || !sessionMatches(session, spec)) {
+    if (spec.mode !== "project") {
         return undefined;
     }
-    if (!session.cwd) {
+    const sourceDir = projectSourceDirForPath(spec, cwd) ?? projectSourceDir(spec, session);
+    if (!sourceDir) {
         return undefined;
     }
-    return remapPathPrefix(cwd, session.cwd, spec.targetDir);
+    return remapPathPrefix(cwd, sourceDir, spec.targetDir);
 }
 function remapWorkspaceRoot(workspaceRoot, spec, session) {
     if (spec.mode === "projects") {
         return remapPathPrefix(workspaceRoot, spec.originalDir, spec.targetDir);
     }
-    if (spec.mode !== "project" || !session.cwd) {
+    if (spec.mode !== "project") {
         return undefined;
     }
-    return remapPathPrefix(workspaceRoot, session.cwd, spec.targetDir);
+    const sourceDir = projectSourceDirForPath(spec, workspaceRoot) ?? projectSourceDir(spec, session);
+    return sourceDir ? remapPathPrefix(workspaceRoot, sourceDir, spec.targetDir) : undefined;
 }
 function walkJsonl(dir) {
     if (!fs.existsSync(dir)) {

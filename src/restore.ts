@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { ensureDir, normalizeDir } from "./paths.js";
-import type { BackupListResult, RestoreResult } from "./types.js";
+import type { BackupListResult, ExecutionOptions, RestoreResult } from "./types.js";
 
 const MAX_SAMPLES = 10;
 
@@ -45,7 +45,7 @@ export function listBackups(codexHomeInput: string): BackupListResult {
 export function restoreBackup(
   codexHomeInput: string,
   backupInput: string,
-  options: { write: boolean },
+  options: { write: boolean; onProgress?: ExecutionOptions["onProgress"] },
 ): RestoreResult {
   const codexHome = normalizeDir(codexHomeInput);
   const warnings: string[] = [];
@@ -70,8 +70,15 @@ export function restoreBackup(
   let removedWalFiles = 0;
   const samples: RestoreResult["samples"] = [];
 
-  for (const file of files) {
+  for (const [index, file] of files.entries()) {
     const relative = path.relative(backupDir, file);
+    options.onProgress?.({
+      surface: "restore",
+      current: index + 1,
+      total: files.length,
+      label: relative,
+    });
+
     if (relative.startsWith("..") || path.isAbsolute(relative)) {
       warnings.push(`Skipped unsafe backup path: ${file}`);
       continue;

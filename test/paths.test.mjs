@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
+  firstPathUnderParent,
   historyBasename,
   isHistoryPathAbsolute,
+  normalizeExistingHistoryPath,
   remapPathPrefix,
   sameHistoryPath,
 } from "../dist/paths.js";
@@ -44,4 +49,34 @@ test("history path helpers detect win32 and posix styles", () => {
     true,
   );
   assert.equal(sameHistoryPath("/home/me/Projects/App", "/home/me/projects/app"), false);
+});
+
+test("firstPathUnderParent returns one project level below the parent", () => {
+  assert.equal(
+    firstPathUnderParent("/home/me/projects/app/packages/lib", "/home/me/projects"),
+    "/home/me/projects/app",
+  );
+  assert.equal(firstPathUnderParent("/home/me/projects", "/home/me/projects"), "/home/me/projects");
+  assert.equal(firstPathUnderParent("/home/me/projects2/app", "/home/me/projects"), undefined);
+  assert.equal(
+    firstPathUnderParent(
+      String.raw`C:\Users\me\Projects\app\packages\lib`,
+      String.raw`C:\Users\me\Projects`,
+    ),
+    String.raw`C:\Users\me\Projects\app`,
+  );
+});
+
+test("normalizeExistingHistoryPath preserves existing filesystem casing", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "codex-migrate-path-test-"));
+  const actual = path.join(root, "QuaEngine");
+  fs.mkdirSync(actual);
+  const lowercase = path.join(root, "quaengine");
+
+  if (!fs.existsSync(lowercase)) {
+    t.skip("filesystem is case-sensitive");
+    return;
+  }
+
+  assert.equal(normalizeExistingHistoryPath(lowercase), actual);
 });

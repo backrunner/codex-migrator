@@ -29,6 +29,21 @@ export function stripTrailingSeparator(input) {
 export function historyBasename(input) {
     return historyPathApi(input).basename(input);
 }
+export function firstAncestorWithBasename(input, basename) {
+    const api = historyPathApi(input);
+    const normalized = normalizeHistoryPathWith(api, input);
+    const parsed = api.parse(normalized);
+    const relative = api.relative(parsed.root, normalized);
+    const segments = relative.split(api.sep).filter((segment) => segment.length > 0);
+    let current = parsed.root;
+    for (const segment of segments) {
+        current = api.join(current, segment);
+        if (sameProjectBasename(segment, basename)) {
+            return stripTrailingSeparatorWith(api, current);
+        }
+    }
+    return undefined;
+}
 export function isHistoryPathAbsolute(input) {
     return historyPathApi(input).isAbsolute(input);
 }
@@ -41,6 +56,19 @@ export function normalizeHistoryPath(input, ...context) {
     const expanded = expandPath(input);
     const normalized = api.isAbsolute(expanded) ? api.normalize(expanded) : api.resolve(expanded);
     return stripTrailingSeparatorWith(api, normalized);
+}
+export function normalizeExistingHistoryPath(input, ...context) {
+    const normalized = normalizeHistoryPath(input, ...context);
+    if (historyPathApi(input, ...context) === path.win32) {
+        if (process.platform === "win32" && fs.existsSync(normalized)) {
+            return stripTrailingSeparatorWith(path.win32, fs.realpathSync.native(normalized));
+        }
+        return normalized;
+    }
+    if (!fs.existsSync(normalized)) {
+        return normalized;
+    }
+    return canonicalizeExistingPosixPath(normalized);
 }
 export function stripTrailingSeparatorWith(api, input) {
     const parsed = api.parse(input);
@@ -68,6 +96,20 @@ export function remapPathPrefix(candidate, originalDir, targetDir) {
     const relative = api.relative(normalizedOriginal, normalizedCandidate);
     return relative ? api.join(normalizedTarget, relative) : normalizedTarget;
 }
+export function firstPathUnderParent(candidate, parent) {
+    const api = historyPathApi(candidate, parent);
+    const normalizedCandidate = normalizeHistoryPathWith(api, candidate);
+    const normalizedParent = normalizeHistoryPathWith(api, parent);
+    if (!isSameOrInside(normalizedCandidate, normalizedParent)) {
+        return undefined;
+    }
+    const relative = api.relative(normalizedParent, normalizedCandidate);
+    if (!relative) {
+        return normalizedParent;
+    }
+    const firstSegment = relative.split(api.sep).find((segment) => segment.length > 0);
+    return firstSegment ? api.join(normalizedParent, firstSegment) : normalizedParent;
+}
 export function ensureDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
 }
@@ -92,5 +134,30 @@ function normalizeHistoryPathWith(api, input) {
 function comparableHistoryPath(input, api) {
     const normalized = normalizeHistoryPathWith(api, input);
     return api === path.win32 ? normalized.toLowerCase() : normalized;
+}
+function sameProjectBasename(left, right) {
+    return left.toLowerCase() === right.toLowerCase();
+}
+function canonicalizeExistingPosixPath(input) {
+    const normalized = stripTrailingSeparatorWith(path.posix, input);
+    const parsed = path.posix.parse(normalized);
+    const relative = path.posix.relative(parsed.root, normalized);
+    const segments = relative.split(path.posix.sep).filter((segment) => segment.length > 0);
+    let current = parsed.root;
+    for (const segment of segments) {
+        let next = segment;
+        try {
+            const entries = fs.readdirSync(current);
+            next =
+                entries.find((entry) => entry === segment) ??
+                    entries.find((entry) => entry.toLowerCase() === segment.toLowerCase()) ??
+                    segment;
+        }
+        catch {
+            next = segment;
+        }
+        current = path.posix.join(current, next);
+    }
+    return stripTrailingSeparatorWith(path.posix, current);
 }
 //# sourceMappingURL=paths.js.map

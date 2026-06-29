@@ -39,6 +39,7 @@ export interface ExecutionOptions {
   includeJsonl: boolean;
   includeSqlite: boolean;
   json: boolean;
+  onProgress?: (event: ProgressEvent) => void;
 }
 
 export interface SessionSummary {
@@ -63,7 +64,67 @@ export interface JsonlMigrationResult {
   matchedFiles: number;
   changedFiles: number;
   changedLines: number;
+  threadProjectHints: ThreadProjectHint[];
+  projectChanges: Array<{
+    fromCwd: string;
+    toCwd: string;
+    files: number;
+    lines: number;
+  }>;
   samples: FileChangeSample[];
+}
+
+export interface ThreadProjectHint {
+  id: string;
+  fromCwd: string;
+  toCwd: string;
+}
+
+export interface ConfigMigrationResult {
+  scannedFiles: number;
+  matchedSections: number;
+  changedSections: number;
+  projectChanges: Array<{
+    fromCwd: string;
+    toCwd: string;
+    sections: number;
+  }>;
+  samples: Array<{
+    fromCwd: string;
+    toCwd: string;
+  }>;
+  skipped: boolean;
+  reason?: string;
+}
+
+export interface JsonStateMigrationResult {
+  scannedFiles: number;
+  matchedFiles: number;
+  changedFiles: number;
+  changedKeys: number;
+  changedValues: number;
+  projectChanges: Array<{
+    fromCwd: string;
+    toCwd: string;
+    entries: number;
+  }>;
+  samples: Array<{
+    file: string;
+    fromCwd: string;
+    toCwd: string;
+  }>;
+}
+
+export interface JsonStateInspectionResult {
+  scannedFiles: number;
+  pathKeys: number;
+  pathValues: number;
+  files: Array<{
+    file: string;
+    pathKeys: number;
+    pathValues: number;
+    parseError?: string;
+  }>;
 }
 
 export interface SqliteMigrationResult {
@@ -72,6 +133,13 @@ export interface SqliteMigrationResult {
   scannedRows: number;
   matchedRows: number;
   changedRows: number;
+  insertedRows: number;
+  projectChanges: Array<{
+    fromCwd: string;
+    toCwd: string;
+    rows: number;
+  }>;
+  missingRolloutPaths: number;
   skipped: boolean;
   reason?: string;
 }
@@ -82,9 +150,29 @@ export interface MigrationResult {
   action: MigrationSpec;
   codexHome: string;
   backupDir?: string;
+  projects: ProjectMigrationSummary[];
   jsonl: JsonlMigrationResult;
+  config: ConfigMigrationResult;
+  state: JsonStateMigrationResult;
   sqlite: SqliteMigrationResult[];
   warnings: string[];
+}
+
+export interface ProjectMigrationSummary {
+  fromCwd: string;
+  toCwd: string;
+  targetExists: boolean;
+  jsonlFiles: number;
+  configSections: number;
+  stateEntries: number;
+  sqliteRows: number;
+}
+
+export interface ProgressEvent {
+  surface: "scan" | "jsonl" | "config" | "state" | "sqlite" | "restore";
+  current: number;
+  total: number;
+  label: string;
 }
 
 export interface BackupListResult {
@@ -122,6 +210,19 @@ export interface DoctorResult {
     pathSeparator: string;
   };
   sqlite3Available: boolean;
+  state: JsonStateInspectionResult;
+  indexFiles: {
+    history: {
+      path: string;
+      exists: boolean;
+      entries: number;
+    };
+    sessionIndex: {
+      path: string;
+      exists: boolean;
+      entries: number;
+    };
+  };
   sessionsDir: {
     path: string;
     exists: boolean;

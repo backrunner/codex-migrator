@@ -99,6 +99,145 @@ test("single project migration maps matching project basename to target dir", ()
   assert.deepEqual(second.payload.workspace_roots, ["/new/location/app"]);
 });
 
+test("single project migration with fromDir preserves nested cwd paths", () => {
+  const nestedSession = {
+    file: "/tmp/rollout.jsonl",
+    id: "thread-1",
+    cwd: "/old/root/app/packages/lib",
+    modelProvider: "provider",
+    archived: false,
+  };
+  const input = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: {
+        id: "thread-1",
+        cwd: "/old/root/app/packages/lib",
+        model_provider: "provider",
+      },
+    }),
+    JSON.stringify({
+      timestamp: "now",
+      type: "turn_context",
+      payload: {
+        cwd: "/old/root/app/packages/lib/src",
+        workspace_roots: ["/old/root/app"],
+      },
+    }),
+    "",
+  ].join("\n");
+
+  const result = transformJsonlContent(
+    input,
+    {
+      mode: "project",
+      projectName: "app",
+      targetDir: "/new/location/app",
+      fromDir: "/old/root/app",
+    },
+    nestedSession,
+  );
+
+  const [first, second] = result.content.split("\n").map((line) => line && JSON.parse(line));
+  assert.equal(result.changedLines, 2);
+  assert.equal(first.payload.cwd, "/new/location/app/packages/lib");
+  assert.equal(second.payload.cwd, "/new/location/app/packages/lib/src");
+  assert.deepEqual(second.payload.workspace_roots, ["/new/location/app"]);
+});
+
+test("single project migration updates project paths when session cwd is a worktree", () => {
+  const worktreeSession = {
+    file: "/tmp/rollout.jsonl",
+    id: "thread-1",
+    cwd: "/Users/me/.codex/worktrees/1234/app",
+    modelProvider: "provider",
+    archived: false,
+  };
+  const input = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: {
+        id: "thread-1",
+        cwd: "/Users/me/.codex/worktrees/1234/app",
+        model_provider: "provider",
+      },
+    }),
+    JSON.stringify({
+      timestamp: "now",
+      type: "turn_context",
+      payload: {
+        cwd: "/old/root/app/packages/lib",
+        workspace_roots: ["/old/root/app"],
+      },
+    }),
+    "",
+  ].join("\n");
+
+  const result = transformJsonlContent(
+    input,
+    {
+      mode: "project",
+      projectName: "app",
+      targetDir: "/new/location/app",
+    },
+    worktreeSession,
+  );
+
+  const [first, second] = result.content.split("\n").map((line) => line && JSON.parse(line));
+  assert.equal(result.changedLines, 2);
+  assert.equal(first.payload.cwd, "/new/location/app");
+  assert.equal(second.payload.cwd, "/new/location/app/packages/lib");
+  assert.deepEqual(second.payload.workspace_roots, ["/new/location/app"]);
+});
+
+test("single project migration infers nested project root case-insensitively", () => {
+  const nestedSession = {
+    file: "/tmp/rollout.jsonl",
+    id: "thread-1",
+    cwd: "/old/root/QuaEngine/ai/novel-writer",
+    modelProvider: "provider",
+    archived: false,
+  };
+  const input = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: {
+        id: "thread-1",
+        cwd: "/old/root/QuaEngine/ai/novel-writer",
+        model_provider: "provider",
+      },
+    }),
+    JSON.stringify({
+      timestamp: "now",
+      type: "turn_context",
+      payload: {
+        cwd: "/old/root/QuaEngine/ai/novel-writer/src",
+        workspace_roots: ["/old/root/QuaEngine"],
+      },
+    }),
+    "",
+  ].join("\n");
+
+  const result = transformJsonlContent(
+    input,
+    {
+      mode: "project",
+      projectName: "quaengine",
+      targetDir: "/new/root/QuaEngine",
+    },
+    nestedSession,
+  );
+
+  const [first, second] = result.content.split("\n").map((line) => line && JSON.parse(line));
+  assert.equal(result.changedLines, 2);
+  assert.equal(first.payload.cwd, "/new/root/QuaEngine/ai/novel-writer");
+  assert.equal(second.payload.cwd, "/new/root/QuaEngine/ai/novel-writer/src");
+  assert.deepEqual(second.payload.workspace_roots, ["/new/root/QuaEngine"]);
+});
+
 test("project migration handles win32 paths", () => {
   const windowsSession = {
     file: "/tmp/rollout.jsonl",

@@ -29,15 +29,15 @@ export const tui = {
 export function status(kind: "success" | "dry" | "warning" | "error" | "info", text: string): string {
   switch (kind) {
     case "success":
-      return tui.green(`OK ${text}`);
+      return `${tui.green("[done]")} ${text}`;
     case "dry":
-      return tui.yellow(`DRY ${text}`);
+      return `${tui.yellow("[preview]")} ${text}`;
     case "warning":
-      return tui.yellow(`WARN ${text}`);
+      return `${tui.yellow("[warning]")} ${text}`;
     case "error":
-      return tui.red(`ERR ${text}`);
+      return `${tui.red("[error]")} ${text}`;
     case "info":
-      return tui.cyan(`INFO ${text}`);
+      return `${tui.cyan("[info]")} ${text}`;
   }
 }
 
@@ -50,11 +50,11 @@ export function pathValue(value: string): string {
 }
 
 export function section(title: string): string {
-  return `\n${tui.bold(title)}\n`;
+  return `\n${tui.bold(title)}\n${tui.gray("-".repeat(title.length))}\n`;
 }
 
 export function hint(text: string): string {
-  return `${tui.cyan("Hint")} ${text}`;
+  return `${tui.cyan("Hint:")} ${text}`;
 }
 
 export function warnLine(text: string): string {

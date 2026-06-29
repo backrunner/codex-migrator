@@ -1,7 +1,9 @@
 AGENTS.md
 src/
 test/
+docs/
 tsconfig.json
+pnpm-lock.yaml
 coverage/
 *.log
 .DS_Store

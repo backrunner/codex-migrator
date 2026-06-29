@@ -26,9 +26,7 @@
     "url": "git+https://github.com/backrunner/codex-migrator.git"
   },
   "files": [
-    "dist",
-    "README.md",
-    "LICENSE"
+    "dist/"
   ],
   "author": "BackRunner <dev@backrunner.top>",
   "license": "MIT",

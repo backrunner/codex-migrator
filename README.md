@@ -15,21 +15,17 @@ timestamped backup under `~/.codex/backups/`.
 
 ## Install
 
-Install dependencies and build the CLI:
+Install from npm:
 
 ```bash
-pnpm install
-pnpm build
+npm install -g codex-migrator
 ```
 
-Install the command on your PATH:
+Or run it without a global install:
 
 ```bash
-npm link
+npx codex-migrator --help
 ```
-
-`pnpm link --global` also works when your pnpm global bin directory is already
-on PATH.
 
 Verify the install:
 
@@ -45,6 +41,14 @@ PowerShell equivalent:
 Get-Command codex-migrate
 codex-migrate --help
 codex-migrate doctor
+```
+
+To install from a local checkout:
+
+```bash
+pnpm install
+pnpm build
+npm link
 ```
 
 ## Normal Workflow

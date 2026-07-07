@@ -73,6 +73,31 @@ test("cli migration asks for confirmation and defaults to no", () => {
   assert.equal(readSessionCwd(file), "/new/app");
 });
 
+test("cli --yes applies migration without prompting", () => {
+  const codexHome = makeTempCodexHome();
+  const file = makeSession(codexHome);
+
+  const result = spawnSync(
+    process.execPath,
+    [
+      "dist/cli.js",
+      "--yes",
+      "--codex-home",
+      codexHome,
+      "project",
+      "app",
+      "/new/app",
+      "--no-sqlite",
+    ],
+    { input: "", encoding: "utf8" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /Apply these migration changes\?/);
+  assert.match(result.stdout, /Migration applied/);
+  assert.equal(readSessionCwd(file), "/new/app");
+});
+
 test("tty progress uses human task labels without duplicate INFO lines", { skip: !process.stdin.isTTY }, () => {
   const codexHome = makeTempCodexHome();
   const file = makeSession(codexHome);

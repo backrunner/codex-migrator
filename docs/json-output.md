@@ -62,6 +62,9 @@ Successful migration commands emit:
     "scannedFiles": 1,
     "matchedSections": 0,
     "changedSections": 0,
+    "changedValues": 0,
+    "projectChanges": [],
+    "providerChanges": [],
     "samples": [],
     "skipped": false
   },
@@ -97,7 +100,9 @@ Errors emit:
 
 The CLI does not print conversation message content. Samples include only
 thread IDs, file paths, providers, and project directories. Project migration
-samples are grouped to one sample per project.
+samples are grouped to one sample per project. Provider migrations may also
+report `config.providerChanges` when matching provider references or
+`model_providers` sections are found in `config.toml`.
 
 ## Options
 

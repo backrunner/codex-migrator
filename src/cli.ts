@@ -30,10 +30,11 @@ const program = new Command();
 program
   .name("codex-migrate")
   .description("Migrate Codex conversation history between providers and project directories.")
-  .version("0.1.0")
+  .version("0.2.0")
   .option("--codex-home <dir>", "Codex home directory", defaultCodexHome())
   .option("--json", "emit machine-readable JSON")
-  .option("--no-archived", "skip archived_sessions");
+  .option("--no-archived", "skip archived_sessions")
+  .option("-y, --yes", "apply the migration without prompting (non-interactive)");
 
 program
   .command("doctor")
@@ -213,11 +214,12 @@ program.parseAsync(process.argv).catch((error: unknown) => {
 });
 
 async function runCommand(fn: (global: GlobalOptions) => void | Promise<void>): Promise<void> {
-  const opts = program.opts<{ codexHome: string; json?: boolean; archived?: boolean }>();
+  const opts = program.opts<{ codexHome: string; json?: boolean; archived?: boolean; yes?: boolean }>();
   const global: GlobalOptions = {
     codexHome: normalizeDir(opts.codexHome),
     json: Boolean(opts.json),
     archived: opts.archived !== false,
+    yes: Boolean(opts.yes),
   };
 
   try {
@@ -283,7 +285,7 @@ async function runMigrationCommand(
     return;
   }
 
-  const confirmed = await confirmApply("Apply these migration changes? [y/N]");
+  const confirmed = global.yes || (await confirmApply("Apply these migration changes? [y/N]"));
   if (!confirmed) {
     process.stdout.write(`\n${status("info", "No changes applied")}\n`);
     return;
@@ -318,7 +320,7 @@ async function runJsonMigrationCommand(
   }
 
   writeJsonConfirmationSummary("migration", preview);
-  const confirmed = await confirmApply("Apply these migration changes? [y/N]", process.stderr);
+  const confirmed = global.yes || (await confirmApply("Apply these migration changes? [y/N]", process.stderr));
   if (!confirmed) {
     printJson({ ...preview, confirmed: false });
     return;
@@ -354,7 +356,7 @@ async function runRestoreCommand(global: GlobalOptions, backup: string): Promise
     return;
   }
 
-  const confirmed = await confirmApply("Apply this restore? [y/N]");
+  const confirmed = global.yes || (await confirmApply("Apply this restore? [y/N]"));
   if (!confirmed) {
     process.stdout.write(`\n${status("info", "No files restored")}\n`);
     return;
@@ -381,7 +383,7 @@ async function runJsonRestoreCommand(
   }
 
   writeJsonConfirmationSummary("restore", preview);
-  const confirmed = await confirmApply("Apply this restore? [y/N]", process.stderr);
+  const confirmed = global.yes || (await confirmApply("Apply this restore? [y/N]", process.stderr));
   if (!confirmed) {
     printJson({ ...preview, confirmed: false });
     return;
@@ -435,7 +437,7 @@ function writeJsonConfirmationSummary(kind: "migration" | "restore", result: Mig
   const migration = result as MigrationResult;
   const sqliteRows = migration.sqlite.reduce((sum, db) => sum + db.changedRows, 0);
   process.stderr.write(
-    `Preview migration: ${migration.jsonl.changedFiles} JSONL files, ${migration.jsonl.changedLines} JSONL lines, ${migration.config.changedSections} config project sections, ${migration.state.changedFiles} JSON state files, ${sqliteRows} SQLite rows. Answer y to apply; default is no.\n`,
+    `Preview migration: ${migration.jsonl.changedFiles} JSONL files, ${migration.jsonl.changedLines} JSONL lines, ${configChangeSummary(migration.config)} in config.toml, ${migration.state.changedFiles} JSON state files, ${sqliteRows} SQLite rows. Answer y to apply; default is no.\n`,
   );
 }
 
@@ -608,6 +610,19 @@ function jsonStateOverview(result: MigrationResult): string {
   ].join(", ");
 }
 
+function configChangeSummary(config: MigrationResult["config"]): string {
+  if (config.skipped) {
+    return `skipped: ${config.reason}`;
+  }
+
+  const changes = [
+    config.changedSections > 0 ? `${formatCount(config.changedSections)} sections` : undefined,
+    config.changedValues > 0 ? `${formatCount(config.changedValues)} values` : undefined,
+  ].filter((change): change is string => change !== undefined);
+
+  return changes.length > 0 ? changes.join(", ") : "0 changes";
+}
+
 function sqliteSurfaceName(codexHome: string, db: MigrationResult["sqlite"][number]): string {
   return `SQLite ${relativeFromCodexHome(codexHome, db.database)}:${db.table}`;
 }
@@ -631,12 +646,7 @@ function printMigration(result: MigrationResult, json: boolean): void {
       ["Codex home", pathValue(result.codexHome)],
       ["Projects", projectOverview(result)],
       ["JSONL", `${formatCount(result.jsonl.changedFiles)} files, ${formatCount(result.jsonl.changedLines)} lines`],
-      [
-        "Config",
-        result.config.skipped
-          ? `skipped: ${result.config.reason}`
-          : `${formatCount(result.config.changedSections)} project sections`,
-      ],
+      ["Config", configChangeSummary(result.config)],
       ["JSON state", jsonStateOverview(result)],
       ["SQLite", `${formatCount(totalSqliteChanges(result))} rows`],
     ]),
@@ -676,9 +686,7 @@ function printMigration(result: MigrationResult, json: boolean): void {
           result.config.skipped ? "skipped" : "ready",
           result.config.skipped ? "-" : `${formatCount(result.config.scannedFiles)} files`,
           result.config.skipped ? "-" : `${formatCount(result.config.matchedSections)} sections`,
-          result.config.skipped
-            ? `skipped: ${result.config.reason}`
-            : `${formatCount(result.config.changedSections)} project sections`,
+          configChangeSummary(result.config),
           "-",
         ],
         [
@@ -898,6 +906,7 @@ function hasMigrationChanges(result: MigrationResult): boolean {
   return (
     result.jsonl.changedFiles > 0 ||
     result.config.changedSections > 0 ||
+    result.config.changedValues > 0 ||
     result.state.changedFiles > 0 ||
     result.sqlite.some((db) => db.changedRows > 0)
   );

@@ -6,6 +6,7 @@ export interface GlobalOptions {
   codexHome: string;
   json: boolean;
   archived: boolean;
+  yes: boolean;
 }
 
 export interface ProviderMigrationSpec {
@@ -126,14 +127,23 @@ export interface ConfigMigrationResult {
   scannedFiles: number;
   matchedSections: number;
   changedSections: number;
+  changedValues: number;
   projectChanges: Array<{
     fromCwd: string;
     toCwd: string;
     sections: number;
   }>;
+  providerChanges: Array<{
+    fromProvider: string;
+    toProvider: string;
+    sections: number;
+    values: number;
+  }>;
   samples: Array<{
-    fromCwd: string;
-    toCwd: string;
+    fromCwd?: string;
+    toCwd?: string;
+    fromProvider?: string;
+    toProvider?: string;
   }>;
   skipped: boolean;
   reason?: string;

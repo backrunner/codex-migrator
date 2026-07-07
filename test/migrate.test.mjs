@@ -308,6 +308,136 @@ test("project migration deduplicates config sections when target already exists"
   assert.doesNotMatch(updated, /trust_level = "untrusted"/);
 });
 
+test("provider migration updates config provider names and creates a backup", () => {
+  const codexHome = makeTempCodexHome();
+  const config = [
+    'model_provider = "old-provider"',
+    "",
+    "[profiles.default]",
+    "model_provider = 'old-provider'",
+    "",
+    '[model_providers."old-provider"]',
+    'name = "old-provider"',
+    'base_url = "https://example.com/v1"',
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(codexHome, "config.toml"), config);
+
+  const dryRun = runMigration(
+    { mode: "provider", targetProvider: "new-provider", fromProvider: "old-provider" },
+    {
+      write: false,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  assert.equal(dryRun.config.matchedSections, 1);
+  assert.equal(dryRun.config.changedSections, 1);
+  assert.equal(dryRun.config.changedValues, 3);
+  assert.deepEqual(dryRun.config.providerChanges, [
+    { fromProvider: "old-provider", toProvider: "new-provider", sections: 1, values: 3 },
+  ]);
+  assert.deepEqual(dryRun.config.samples, [
+    { fromProvider: "old-provider", toProvider: "new-provider" },
+  ]);
+  assert.equal(fs.readFileSync(path.join(codexHome, "config.toml"), "utf8"), config);
+
+  const applied = runMigration(
+    { mode: "provider", targetProvider: "new-provider", fromProvider: "old-provider" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  const updated = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  assert.equal(applied.config.changedSections, 1);
+  assert.equal(applied.config.changedValues, 3);
+  assert.match(updated, /model_provider = "new-provider"/);
+  assert.match(updated, /model_provider = 'new-provider'/);
+  assert.match(updated, /\[model_providers\."new-provider"\]/);
+  assert.match(updated, /name = "new-provider"/);
+  assert.doesNotMatch(updated, /old-provider/);
+  assert.equal(fs.readFileSync(path.join(applied.backupDir, "config.toml"), "utf8"), config);
+});
+
+test("provider migration deduplicates config provider sections when target already exists", () => {
+  const codexHome = makeTempCodexHome();
+  const config = [
+    'model_provider = "openai"',
+    "",
+    "[model_providers.openai]",
+    'name = "OpenAI"',
+    'base_url = "https://old.example.com/v1"',
+    "",
+    "[model_providers.packycode]",
+    'name = "PackyCode"',
+    'base_url = "https://new.example.com/v1"',
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(codexHome, "config.toml"), config);
+
+  const result = runMigration(
+    { mode: "provider", targetProvider: "packycode", fromProvider: "openai" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  const updated = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  assert.equal(result.config.changedSections, 1);
+  assert.equal(result.config.changedValues, 1);
+  assert.equal(updated.match(/\[model_providers\.packycode\]/g)?.length, 1);
+  assert.doesNotMatch(updated, /\[model_providers\.openai\]/);
+  assert.doesNotMatch(updated, /old\.example\.com/);
+  assert.match(updated, /new\.example\.com/);
+});
+
+test("provider migration without from leaves config provider sections intact", () => {
+  const codexHome = makeTempCodexHome();
+  const config = [
+    'model_provider = "openai"',
+    "",
+    "[model_providers.openai]",
+    'name = "OpenAI"',
+    'base_url = "https://old.example.com/v1"',
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(codexHome, "config.toml"), config);
+
+  const result = runMigration(
+    { mode: "provider", targetProvider: "packycode" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  const updated = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  assert.equal(result.config.changedSections, 0);
+  assert.equal(result.config.changedValues, 1);
+  assert.match(updated, /model_provider = "packycode"/);
+  assert.match(updated, /\[model_providers\.openai\]/);
+  assert.match(updated, /old\.example\.com/);
+});
+
 test("write project migration updates global JSON state files", () => {
   const codexHome = makeTempCodexHome();
   const globalStateFile = path.join(codexHome, ".codex-global-state.json");

@@ -13,6 +13,13 @@ you review the preview and answer the confirmation prompt with `y`; pressing
 Enter leaves the dry-run unchanged. Every confirmed migration creates a
 timestamped backup under `~/.codex/backups/`.
 
+For non-interactive use (e.g. scripting or being driven by another tool), pass
+`-y` / `--yes` to apply the migration without prompting:
+
+```bash
+codex-migrate project serlink /Users/me/Work/serlink --from-dir /Users/me/Projects/serlink --yes
+```
+
 ## Install
 
 Install from npm:
@@ -91,10 +98,16 @@ codex-migrate provider packycode --from openai
 ```
 
 This updates conversations currently stored with `model_provider: openai` so
-they use `packycode`.
+they use `packycode`. Matching `config.toml` references such as
+`model_provider = "openai"` and provider sections such as
+`[model_providers.openai]` are included in the preview and updated when the
+migration is applied. If the target provider section already exists, the old
+provider section is removed to avoid duplicate TOML tables.
 
 If you omit `--from`, every conversation that is not already using the target
-provider is included in the preview:
+provider is included in the preview. In that mode, `config.toml` provider
+sections are left intact; only `model_provider = "..."` references are updated
+to the target provider.
 
 ```bash
 codex-migrate provider packycode
@@ -164,7 +177,8 @@ The restore command is also a dry run by default. Review the preview and answer
 `codex-migrate` can update Codex session JSONL files, `config.toml`, active JSON
 state files, and SQLite thread catalogs under your Codex home. Project
 migrations update both `cwd` and `workspace_roots` where present. Provider
-migrations update stored `model_provider` values.
+migrations update stored `model_provider` values and matching provider
+references in `config.toml`.
 
 The CLI never prints conversation message content in previews.
 

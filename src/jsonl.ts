@@ -10,6 +10,7 @@ import {
   normalizeHistoryPath,
   relativeFromCodexHome,
   remapPathPrefix,
+  walkFilesFollowingSymlinks,
 } from "./paths.js";
 import type {
   FileChangeSample,
@@ -59,7 +60,9 @@ export function discoverSessionFiles(
 }
 
 export function countSessionFiles(dir: string): number {
-  return walkJsonl(dir).length;
+  return walkFilesFollowingSymlinks(dir, {
+    includeFile: (_file, name) => name.endsWith(".jsonl"),
+  }).length;
 }
 
 export function validateJsonlPlan(
@@ -367,7 +370,9 @@ function discoverJsonlFingerprints(codexHome: string, includeArchived: boolean):
   }
 
   return roots.flatMap(({ dir, archived }) =>
-    walkJsonl(dir).map((file) => fingerprintJsonlFile(file, archived)),
+    walkFilesFollowingSymlinks(dir, {
+      includeFile: (_file, name) => name.endsWith(".jsonl"),
+    }).map((file) => fingerprintJsonlFile(file, archived)),
   );
 }
 
@@ -753,24 +758,6 @@ function remapWorkspaceRoot(
 
   const sourceDir = projectSourceDirForPath(spec, workspaceRoot) ?? projectSourceDir(spec, session);
   return sourceDir ? remapPathPrefix(workspaceRoot, sourceDir, spec.targetDir) : undefined;
-}
-
-function walkJsonl(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const out: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      out.push(...walkJsonl(fullPath));
-    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
-      out.push(fullPath);
-    }
-  }
-
-  return out.sort();
 }
 
 function backupFile(codexHome: string, backupDir: string, file: string): void {

@@ -1,6 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, firstPathUnderParent, relativeFromCodexHome, remapPathPrefix } from "./paths.js";
+import {
+  ensureDir,
+  firstPathUnderParent,
+  relativeFromCodexHome,
+  remapPathPrefix,
+  walkFilesFollowingSymlinks,
+} from "./paths.js";
 import { projectSourceDir } from "./jsonl.js";
 import type {
   JsonStateInspectionResult,
@@ -44,9 +50,10 @@ export function discoverJsonStateFiles(codexHome: string): string[] {
     files.add(processManager);
   }
 
-  if (fs.existsSync(codexHome)) {
-    collectJsonStateFiles(codexHome, codexHome, files);
-  }
+  walkFilesFollowingSymlinks(codexHome, {
+    excludeDir: (dir) => isExcludedStateDir(codexHome, dir),
+    includeFile: (_file, name) => name.endsWith(".json") && !EXCLUDED_STATE_FILES.has(name),
+  }).forEach((file) => files.add(file));
 
   return [...files].sort();
 }
@@ -160,22 +167,6 @@ export function inspectJsonState(codexHome: string): JsonStateInspectionResult {
     pathValues,
     files: inspected,
   };
-}
-
-function collectJsonStateFiles(dir: string, codexHome: string, files: Set<string>): void {
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const file = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      if (!isExcludedStateDir(codexHome, file)) {
-        collectJsonStateFiles(file, codexHome, files);
-      }
-      continue;
-    }
-
-    if (entry.isFile() && entry.name.endsWith(".json") && !EXCLUDED_STATE_FILES.has(entry.name)) {
-      files.add(file);
-    }
-  }
 }
 
 function isExcludedStateDir(codexHome: string, dir: string): boolean {

@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { ensureDir, normalizeDir } from "./paths.js";
+import { ensureDir, normalizeDir, pathIsDirectory, walkFilesFollowingSymlinks } from "./paths.js";
 import type { BackupListResult, ExecutionOptions, RestoreResult } from "./types.js";
 
 const MAX_SAMPLES = 10;
@@ -21,7 +21,7 @@ export function listBackups(codexHomeInput: string): BackupListResult {
 
   const backups = fs
     .readdirSync(backupsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
+    .filter((entry) => pathIsDirectory(path.join(backupsRoot, entry.name)))
     .map((entry) => {
       const backupPath = path.join(backupsRoot, entry.name);
       const stat = fs.statSync(backupPath);
@@ -51,7 +51,7 @@ export function restoreBackup(
   const warnings: string[] = [];
   const backupDir = resolveBackupDir(codexHome, backupInput);
 
-  if (!backupDir || !fs.existsSync(backupDir) || !fs.statSync(backupDir).isDirectory()) {
+  if (!backupDir || !pathIsDirectory(backupDir)) {
     return {
       ok: false,
       dryRun: !options.write,
@@ -134,21 +134,7 @@ function resolveBackupDir(codexHome: string, input: string): string | undefined 
 }
 
 function walkFiles(dir: string): string[] {
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const files: string[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    const fullPath = path.join(dir, entry.name);
-    if (entry.isDirectory()) {
-      files.push(...walkFiles(fullPath));
-    } else if (entry.isFile()) {
-      files.push(fullPath);
-    }
-  }
-
-  return files.sort();
+  return walkFilesFollowingSymlinks(dir);
 }
 
 function isSqliteDatabaseFile(file: string): boolean {

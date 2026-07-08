@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { migrateConfigToml } from "./config.js";
 import { applyJsonlPlan, discoverSessionFiles, migrateJsonlFiles, validateJsonlPlan } from "./jsonl.js";
-import { ensureDir, normalizeDir } from "./paths.js";
+import { ensureDir, normalizeDir, pathIsDirectory } from "./paths.js";
 import { migrateSqlite, sqliteWritePreflight } from "./sqlite.js";
 import { migrateJsonState } from "./state.js";
 import type { ExecutionOptions, JsonlMigrationPlan, MigrationResult, MigrationSpec, ProjectMigrationSummary } from "./types.js";
@@ -325,7 +325,8 @@ function listMigrationBackupDirs(backupsRoot: string): MigrationBackupDir[] {
 
   return fs
     .readdirSync(backupsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && entry.name.startsWith(MIGRATION_BACKUP_PREFIX))
+    .filter((entry) => entry.name.startsWith(MIGRATION_BACKUP_PREFIX))
+    .filter((entry) => pathIsDirectory(path.join(backupsRoot, entry.name)))
     .map((entry) => {
       const backupPath = path.join(backupsRoot, entry.name);
       const stat = fs.statSync(backupPath);

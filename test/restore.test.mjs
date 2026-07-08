@@ -9,6 +9,16 @@ function makeTempCodexHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "codex-restore-test-"));
 }
 
+function symlinkDirOrSkip(t, target, link) {
+  try {
+    fs.symlinkSync(target, link, "dir");
+    return true;
+  } catch (error) {
+    t.skip(`directory symlinks are not available: ${error.message}`);
+    return false;
+  }
+}
+
 test("restoreBackup defaults to dry-run and write restores files", () => {
   const codexHome = makeTempCodexHome();
   const backupDir = path.join(codexHome, "backups", "codex-migrate-test");
@@ -52,6 +62,31 @@ test("restoreBackup removes sqlite sidecars before restoring database files", ()
   assert.equal(fs.readFileSync(targetDb, "utf8"), "backup-db");
   assert.equal(fs.existsSync(`${targetDb}-wal`), false);
   assert.equal(fs.existsSync(`${targetDb}-shm`), false);
+});
+
+test("restoreBackup follows symlinked backup directories", (t) => {
+  const codexHome = makeTempCodexHome();
+  const backupDir = path.join(codexHome, "backups", "codex-migrate-test");
+  const linkedSessions = path.join(codexHome, "linked-backup-sessions");
+  const backupFile = path.join(linkedSessions, "2026", "06", "28", "rollout.jsonl");
+  const targetFile = path.join(codexHome, "sessions", "2026", "06", "28", "rollout.jsonl");
+
+  fs.mkdirSync(path.dirname(backupFile), { recursive: true });
+  fs.mkdirSync(backupDir, { recursive: true });
+  fs.writeFileSync(backupFile, "original\n");
+  if (!symlinkDirOrSkip(t, linkedSessions, path.join(backupDir, "sessions"))) {
+    return;
+  }
+
+  const dryRun = restoreBackup(codexHome, "codex-migrate-test", { write: false });
+  assert.equal(dryRun.ok, true);
+  assert.equal(dryRun.restoredFiles, 1);
+  assert.equal(fs.existsSync(targetFile), false);
+
+  const applied = restoreBackup(codexHome, "codex-migrate-test", { write: true });
+  assert.equal(applied.ok, true);
+  assert.equal(applied.restoredFiles, 1);
+  assert.equal(fs.readFileSync(targetFile, "utf8"), "original\n");
 });
 
 test("listBackups returns newest backups first", () => {

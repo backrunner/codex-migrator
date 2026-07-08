@@ -10,6 +10,16 @@ function makeTempCodexHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), "codex-migrate-test-"));
 }
 
+function symlinkDirOrSkip(t, target, link) {
+  try {
+    fs.symlinkSync(target, link, "dir");
+    return true;
+  } catch (error) {
+    t.skip(`directory symlinks are not available: ${error.message}`);
+    return false;
+  }
+}
+
 function readJsonl(file) {
   return fs
     .readFileSync(file, "utf8")
@@ -70,6 +80,95 @@ test("write project migration updates JSONL and creates a backup", () => {
     "rollout-test.jsonl",
   );
   assert.equal(fs.readFileSync(backupFile, "utf8"), original);
+});
+
+test("write project migration follows a symlinked Codex home", (t) => {
+  const parent = makeTempCodexHome();
+  const realHome = path.join(parent, "real-codex");
+  const linkedHome = path.join(parent, "linked-codex");
+  fs.mkdirSync(realHome);
+  if (!symlinkDirOrSkip(t, realHome, linkedHome)) {
+    return;
+  }
+
+  const sessionDir = path.join(realHome, "sessions", "2026", "06", "28");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const file = path.join(sessionDir, "rollout-test.jsonl");
+  const original = [
+    JSON.stringify({
+      timestamp: "now",
+      type: "session_meta",
+      payload: { id: "thread-1", cwd: "/old/app", model_provider: "openai" },
+    }),
+    "",
+  ].join("\n");
+  fs.writeFileSync(file, original);
+
+  const result = runMigration(
+    { mode: "project", projectName: "app", targetDir: "/new/app" },
+    {
+      write: true,
+      codexHome: linkedHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.equal(result.jsonl.changedFiles, 1);
+  assert.ok(fs.existsSync(path.join(realHome, "backups")));
+
+  const [meta] = readJsonl(file);
+  assert.equal(meta.payload.cwd, "/new/app");
+  assert.equal(
+    fs.readFileSync(
+      path.join(result.backupDir, "sessions", "2026", "06", "28", "rollout-test.jsonl"),
+      "utf8",
+    ),
+    original,
+  );
+});
+
+test("project migration scans symlinked Codex subdirectories", (t) => {
+  const parent = makeTempCodexHome();
+  const codexHome = path.join(parent, "codex-home");
+  fs.mkdirSync(codexHome);
+
+  const sessionsDir = path.join(codexHome, "sessions");
+  const linkedYear = path.join(parent, "actual-2026");
+  fs.mkdirSync(path.join(linkedYear, "06", "28"), { recursive: true });
+  fs.mkdirSync(sessionsDir);
+  if (!symlinkDirOrSkip(t, linkedYear, path.join(sessionsDir, "2026"))) {
+    return;
+  }
+  writeSession(path.join(linkedYear, "06", "28", "rollout-test.jsonl"), "thread-1", "/old/app");
+
+  const linkedState = path.join(parent, "actual-state");
+  fs.mkdirSync(linkedState);
+  fs.writeFileSync(
+    path.join(linkedState, "state.json"),
+    JSON.stringify({ recentProjectPath: "/old/app/packages/lib" }, null, 2),
+  );
+  if (!symlinkDirOrSkip(t, linkedState, path.join(codexHome, "state-link"))) {
+    return;
+  }
+
+  const result = runMigration(
+    { mode: "project", projectName: "app", fromDir: "/old/app", targetDir: "/new/app" },
+    {
+      write: false,
+      codexHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  assert.equal(result.jsonl.changedFiles, 1);
+  assert.equal(result.state.changedFiles, 1);
 });
 
 test("write migration prunes old codex-migrate backups after retaining max", () => {

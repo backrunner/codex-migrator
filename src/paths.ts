@@ -4,6 +4,11 @@ import path from "node:path";
 
 type PathApi = typeof path.posix;
 
+interface WalkFilesOptions {
+  excludeDir?: (dir: string, name: string) => boolean;
+  includeFile?: (file: string, name: string) => boolean;
+}
+
 export function expandPath(input: string): string {
   if (input === "~") {
     return os.homedir();
@@ -160,6 +165,53 @@ export function pathExists(filePath: string): boolean {
   return fs.existsSync(filePath);
 }
 
+export function pathIsDirectory(filePath: string): boolean {
+  return statFollowingSymlink(filePath)?.isDirectory() ?? false;
+}
+
+export function walkFilesFollowingSymlinks(
+  dir: string,
+  options: WalkFilesOptions = {},
+  seenDirectories = new Set<string>(),
+): string[] {
+  const stat = statFollowingSymlink(dir);
+  if (!stat?.isDirectory()) {
+    return [];
+  }
+
+  const realDir = realpathForTraversal(dir);
+  if (seenDirectories.has(realDir)) {
+    return [];
+  }
+  seenDirectories.add(realDir);
+
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+    const kind = pathKindForDirent(dir, entry);
+
+    if (kind === "directory") {
+      if (!options.excludeDir?.(fullPath, entry.name)) {
+        files.push(...walkFilesFollowingSymlinks(fullPath, options, seenDirectories));
+      }
+      continue;
+    }
+
+    if (kind === "file" && (options.includeFile?.(fullPath, entry.name) ?? true)) {
+      files.push(fullPath);
+    }
+  }
+
+  return files.sort();
+}
+
 export function relativeFromCodexHome(codexHome: string, filePath: string): string {
   const relative = path.relative(codexHome, filePath);
   return relative.startsWith("..") ? path.basename(filePath) : relative;
@@ -186,6 +238,43 @@ function comparableHistoryPath(input: string, api: PathApi): string {
 
 function sameProjectBasename(left: string, right: string): boolean {
   return left.toLowerCase() === right.toLowerCase();
+}
+
+function statFollowingSymlink(filePath: string): fs.Stats | undefined {
+  try {
+    return fs.statSync(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function realpathForTraversal(dir: string): string {
+  try {
+    return fs.realpathSync.native(dir);
+  } catch {
+    return path.resolve(dir);
+  }
+}
+
+function pathKindForDirent(parent: string, entry: fs.Dirent): "directory" | "file" | "other" {
+  if (entry.isDirectory()) {
+    return "directory";
+  }
+
+  if (entry.isFile()) {
+    return "file";
+  }
+
+  if (!entry.isSymbolicLink()) {
+    return "other";
+  }
+
+  const stat = statFollowingSymlink(path.join(parent, entry.name));
+  if (stat?.isDirectory()) {
+    return "directory";
+  }
+
+  return stat?.isFile() ? "file" : "other";
 }
 
 function canonicalizeExistingPosixPath(input: string): string {

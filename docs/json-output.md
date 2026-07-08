@@ -20,6 +20,7 @@ codex-migrate --json backups list
 codex-migrate --json provider packycode --from openai
 codex-migrate --json project serlink /Users/me/Work/serlink
 codex-migrate --json projects /Users/me/Projects /Users/me/Work
+codex-migrate --json --max-backups 20 project serlink /Users/me/Work/serlink
 ```
 
 Windows example:
@@ -86,6 +87,18 @@ If a confirmed migration writes changes, the final JSON has `dryRun: false`,
 `confirmed: true`, and a `preview` object with the original dry-run result. If
 the prompt is declined, the final JSON has `dryRun: true` and
 `confirmed: false`.
+
+Confirmed writes also include backup retention details:
+
+```json
+{
+  "backupDir": "/Users/me/.codex/backups/codex-migrate-2026-06-28T12-00-00-000Z",
+  "backupRetention": {
+    "maxBackups": 10,
+    "prunedBackups": []
+  }
+}
+```
 
 Errors emit:
 

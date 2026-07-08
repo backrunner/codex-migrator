@@ -3,7 +3,7 @@ import { clearLine, cursorTo } from "node:readline";
 import { createInterface } from "node:readline/promises";
 import { Command } from "commander";
 import { runDoctor } from "./doctor.js";
-import { runMigration } from "./migrate.js";
+import { DEFAULT_MAX_BACKUPS, runMigration } from "./migrate.js";
 import {
   defaultCodexHome,
   normalizeDir,
@@ -34,7 +34,13 @@ program
   .option("--codex-home <dir>", "Codex home directory", defaultCodexHome())
   .option("--json", "emit machine-readable JSON")
   .option("--no-archived", "skip archived_sessions")
-  .option("-y, --yes", "apply the migration without prompting (non-interactive)");
+  .option("-y, --yes", "apply the migration without prompting (non-interactive)")
+  .option(
+    "--max-backups <n>",
+    "maximum codex-migrate backup snapshots to keep after writes (0 disables pruning)",
+    parseNonNegativeInt,
+    DEFAULT_MAX_BACKUPS,
+  );
 
 program
   .command("doctor")
@@ -214,12 +220,19 @@ program.parseAsync(process.argv).catch((error: unknown) => {
 });
 
 async function runCommand(fn: (global: GlobalOptions) => void | Promise<void>): Promise<void> {
-  const opts = program.opts<{ codexHome: string; json?: boolean; archived?: boolean; yes?: boolean }>();
+  const opts = program.opts<{
+    codexHome: string;
+    json?: boolean;
+    archived?: boolean;
+    yes?: boolean;
+    maxBackups?: number;
+  }>();
   const global: GlobalOptions = {
     codexHome: normalizeDir(opts.codexHome),
     json: Boolean(opts.json),
     archived: opts.archived !== false,
     yes: Boolean(opts.yes),
+    maxBackups: opts.maxBackups ?? DEFAULT_MAX_BACKUPS,
   };
 
   try {
@@ -248,6 +261,7 @@ function executionOptions(
     includeJsonl: commandOptions.jsonl !== false,
     includeSqlite: commandOptions.sqlite !== false,
     json: global.json,
+    maxBackups: global.maxBackups,
     jsonlPlan,
     onJsonlPlan,
     onProgress,
@@ -654,7 +668,19 @@ function printMigration(result: MigrationResult, json: boolean): void {
   process.stdout.write("\n");
 
   if (result.backupDir) {
-    process.stdout.write(table([["Backup", pathValue(result.backupDir)]]));
+    const backupRows = [["Backup", pathValue(result.backupDir)]];
+    if (result.backupRetention) {
+      backupRows.push([
+        "Backups kept",
+        result.backupRetention.maxBackups === 0
+          ? "unlimited"
+          : formatCount(result.backupRetention.maxBackups),
+      ]);
+      if (result.backupRetention.prunedBackups.length > 0) {
+        backupRows.push(["Backups pruned", formatCount(result.backupRetention.prunedBackups.length)]);
+      }
+    }
+    process.stdout.write(table(backupRows));
     process.stdout.write("\n");
   }
 
@@ -990,6 +1016,15 @@ function parsePositiveInt(value: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     throw new Error(`Expected a positive integer, got ${value}`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeInt(value: string): number {
+  const parsed = Number(value);
+  if (!/^\d+$/.test(value) || !Number.isSafeInteger(parsed)) {
+    throw new Error(`Expected a non-negative integer, got ${value}`);
   }
 
   return parsed;

@@ -7,6 +7,7 @@ export interface GlobalOptions {
   json: boolean;
   archived: boolean;
   yes: boolean;
+  maxBackups: number;
 }
 
 export interface ProviderMigrationSpec {
@@ -40,6 +41,7 @@ export interface ExecutionOptions {
   includeJsonl: boolean;
   includeSqlite: boolean;
   json: boolean;
+  maxBackups?: number;
   jsonlPlan?: JsonlMigrationPlan;
   onJsonlPlan?: (plan: JsonlMigrationPlan) => void;
   onProgress?: (event: ProgressEvent) => void;
@@ -202,12 +204,21 @@ export interface MigrationResult {
   action: MigrationSpec;
   codexHome: string;
   backupDir?: string;
+  backupRetention?: BackupRetentionResult;
   projects: ProjectMigrationSummary[];
   jsonl: JsonlMigrationResult;
   config: ConfigMigrationResult;
   state: JsonStateMigrationResult;
   sqlite: SqliteMigrationResult[];
   warnings: string[];
+}
+
+export interface BackupRetentionResult {
+  maxBackups: number;
+  prunedBackups: Array<{
+    name: string;
+    path: string;
+  }>;
 }
 
 export interface ProjectMigrationSummary {

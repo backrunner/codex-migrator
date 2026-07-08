@@ -72,6 +72,53 @@ test("write project migration updates JSONL and creates a backup", () => {
   assert.equal(fs.readFileSync(backupFile, "utf8"), original);
 });
 
+test("write migration prunes old codex-migrate backups after retaining max", () => {
+  const codexHome = makeTempCodexHome();
+  const backupsRoot = path.join(codexHome, "backups");
+  fs.mkdirSync(backupsRoot, { recursive: true });
+
+  for (let index = 0; index < 5; index += 1) {
+    const oldBackup = path.join(backupsRoot, `codex-migrate-old-${index}`);
+    fs.mkdirSync(oldBackup, { recursive: true });
+    fs.writeFileSync(path.join(oldBackup, "state_5.sqlite"), "old");
+    const time = new Date(1000 + index * 1000);
+    fs.utimesSync(oldBackup, time, time);
+  }
+
+  const manualBackup = path.join(backupsRoot, "manual-backup");
+  fs.mkdirSync(manualBackup, { recursive: true });
+
+  const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");
+  fs.mkdirSync(sessionDir, { recursive: true });
+  writeSession(path.join(sessionDir, "rollout-test.jsonl"), "thread-1", "/old/app");
+
+  const result = runMigration(
+    { mode: "project", projectName: "app", targetDir: "/new/app" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: true,
+      includeJsonl: true,
+      includeSqlite: false,
+      json: true,
+      maxBackups: 3,
+    },
+  );
+
+  assert.equal(result.ok, true);
+  assert.ok(result.backupDir);
+  assert.equal(result.backupRetention?.maxBackups, 3);
+  assert.equal(result.backupRetention?.prunedBackups.length, 3);
+
+  const migrationBackups = fs
+    .readdirSync(backupsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("codex-migrate-"))
+    .map((entry) => entry.name);
+  assert.equal(migrationBackups.length, 3);
+  assert.ok(migrationBackups.includes(path.basename(result.backupDir)));
+  assert.equal(fs.existsSync(manualBackup), true);
+});
+
 test("write project migration can reuse a preview JSONL plan", () => {
   const codexHome = makeTempCodexHome();
   const sessionDir = path.join(codexHome, "sessions", "2026", "06", "28");

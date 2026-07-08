@@ -7,11 +7,15 @@ import { migrateSqlite, sqliteWritePreflight } from "./sqlite.js";
 import { migrateJsonState } from "./state.js";
 import type { ExecutionOptions, JsonlMigrationPlan, MigrationResult, MigrationSpec, ProjectMigrationSummary } from "./types.js";
 
+export const DEFAULT_MAX_BACKUPS = 10;
+const MIGRATION_BACKUP_PREFIX = "codex-migrate-";
+
 export function runMigration(
   spec: MigrationSpec,
   options: ExecutionOptions,
 ): MigrationResult {
   const codexHome = normalizeDir(options.codexHome);
+  const maxBackups = normalizeMaxBackups(options.maxBackups);
   const warnings: string[] = [];
 
   if (!fs.existsSync(codexHome)) {
@@ -121,13 +125,16 @@ export function runMigration(
   });
 
   const sqlite = options.includeSqlite
-      ? migrateSqlite(codexHome, spec, {
+    ? migrateSqlite(codexHome, spec, {
         write: options.write,
         backupDir,
         threadProjectHints: jsonl.threadProjectHints,
         onProgress: options.onProgress,
       })
     : [];
+  const backupRetention = backupDir
+    ? pruneMigrationBackups(codexHome, maxBackups, backupDir)
+    : undefined;
 
   return {
     ok: warnings.length === 0,
@@ -135,6 +142,7 @@ export function runMigration(
     action: spec,
     codexHome,
     backupDir,
+    backupRetention,
     projects: summarizeProjectMigrations(spec, jsonl, config, state, sqlite),
     jsonl,
     config,
@@ -246,7 +254,90 @@ function emptyStateResult(): MigrationResult["state"] {
 
 function createBackupDir(codexHome: string): string {
   const timestamp = new Date().toISOString().replaceAll(":", "-").replaceAll(".", "-");
-  const backupDir = path.join(codexHome, "backups", `codex-migrate-${timestamp}`);
-  ensureDir(backupDir);
-  return backupDir;
+  const backupsRoot = path.join(codexHome, "backups");
+  ensureDir(backupsRoot);
+
+  for (let attempt = 0; attempt < 1000; attempt += 1) {
+    const suffix = attempt === 0 ? "" : `-${attempt + 1}`;
+    const backupDir = path.join(backupsRoot, `${MIGRATION_BACKUP_PREFIX}${timestamp}${suffix}`);
+    try {
+      fs.mkdirSync(backupDir);
+      return backupDir;
+    } catch (error) {
+      if (isNodeError(error) && error.code === "EEXIST") {
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw new Error(`Unable to create a unique backup directory under ${backupsRoot}`);
+}
+
+function normalizeMaxBackups(value: number | undefined): number {
+  const maxBackups = value ?? DEFAULT_MAX_BACKUPS;
+  if (!Number.isSafeInteger(maxBackups) || maxBackups < 0) {
+    throw new Error(`maxBackups must be a non-negative integer, got ${String(value)}`);
+  }
+
+  return maxBackups;
+}
+
+interface MigrationBackupDir {
+  name: string;
+  path: string;
+  updatedAtMs: number;
+}
+
+function pruneMigrationBackups(
+  codexHome: string,
+  maxBackups: number,
+  activeBackupDir: string,
+): NonNullable<MigrationResult["backupRetention"]> {
+  if (maxBackups === 0) {
+    return { maxBackups, prunedBackups: [] };
+  }
+
+  const backupsRoot = path.join(codexHome, "backups");
+  const activePath = path.resolve(activeBackupDir);
+  const backups = listMigrationBackupDirs(backupsRoot);
+  const active = backups.find((backup) => path.resolve(backup.path) === activePath);
+  const ordered = active
+    ? [active, ...backups.filter((backup) => path.resolve(backup.path) !== activePath)]
+    : backups;
+  const retainedPaths = new Set(ordered.slice(0, maxBackups).map((backup) => path.resolve(backup.path)));
+  const prunedBackups = ordered
+    .filter((backup) => !retainedPaths.has(path.resolve(backup.path)))
+    .map((backup) => ({ name: backup.name, path: backup.path }));
+
+  for (const backup of prunedBackups) {
+    fs.rmSync(backup.path, { recursive: true, force: true });
+  }
+
+  return { maxBackups, prunedBackups };
+}
+
+function listMigrationBackupDirs(backupsRoot: string): MigrationBackupDir[] {
+  if (!fs.existsSync(backupsRoot)) {
+    return [];
+  }
+
+  return fs
+    .readdirSync(backupsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith(MIGRATION_BACKUP_PREFIX))
+    .map((entry) => {
+      const backupPath = path.join(backupsRoot, entry.name);
+      const stat = fs.statSync(backupPath);
+      return {
+        name: entry.name,
+        path: backupPath,
+        updatedAtMs: stat.mtimeMs,
+      };
+    })
+    .sort((a, b) => b.updatedAtMs - a.updatedAtMs || b.name.localeCompare(a.name));
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
 }

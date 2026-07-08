@@ -11,7 +11,10 @@ Use it when you want to:
 Migration commands always preview the changes first. Nothing is written unless
 you review the preview and answer the confirmation prompt with `y`; pressing
 Enter leaves the dry-run unchanged. Every confirmed migration creates a
-timestamped backup under `~/.codex/backups/`.
+timestamped backup under `~/.codex/backups/`. By default, `codex-migrate` keeps
+the 10 newest `codex-migrate-*` backup snapshots and prunes older snapshots
+after a successful write; pass `--max-backups <n>` to change that limit, or
+`--max-backups 0` to disable pruning.
 
 For non-interactive use (e.g. scripting or being driven by another tool), pass
 `-y` / `--yes` to apply the migration without prompting:
@@ -162,6 +165,10 @@ List migration backups:
 ```bash
 codex-migrate backups list
 ```
+
+Confirmed migrations keep the 10 newest `codex-migrate-*` backup snapshots by
+default. Use `--max-backups <n>` on a migration command to change the retention
+limit, or `--max-backups 0` to keep all snapshots.
 
 Preview a restore from the latest backup:
 

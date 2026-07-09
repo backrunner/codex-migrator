@@ -10,6 +10,7 @@ import type {
 } from "./types.js";
 
 const MAX_SAMPLES = 10;
+const OFFICIAL_MODEL_PROVIDERS = new Set(["openai"]);
 const projectSectionPattern = /^\[projects\."((?:\\.|[^"\\])*)"\](\s*)$/;
 const providerSectionPattern =
   /^\[model_providers\.((?:"(?:\\.|[^"\\])*")|(?:'(?:[^']*)')|(?:[A-Za-z0-9_-]+))\](\s*)$/;
@@ -205,6 +206,7 @@ function transformProviderConfigToml(
       style: TomlKeyStyle;
       matched: boolean;
       changed: boolean;
+      remove: boolean;
     }
   >();
   const targetOwners = new Map<string, number>();
@@ -226,6 +228,11 @@ function transformProviderConfigToml(
     const fromProvider = key.value;
     const matched = spec.fromProvider !== undefined && fromProvider === spec.fromProvider;
     const toProvider = matched ? spec.targetProvider : fromProvider;
+    const remove =
+      matched &&
+      fromProvider !== toProvider &&
+      !isOfficialModelProvider(fromProvider) &&
+      isOfficialModelProvider(toProvider);
     const providerSection = {
       fromProvider,
       toProvider,
@@ -233,6 +240,7 @@ function transformProviderConfigToml(
       style: key.style,
       matched,
       changed: matched && fromProvider !== toProvider,
+      remove,
     };
     const previous = targetOwners.get(toProvider);
     if (previous !== undefined) {
@@ -276,7 +284,7 @@ function transformProviderConfigToml(
       matchedSections += 1;
     }
 
-    if (section.changed || duplicateProviderSections.has(index)) {
+    if (section.changed || section.remove || duplicateProviderSections.has(index)) {
       changedSections += 1;
     }
   }
@@ -287,6 +295,10 @@ function transformProviderConfigToml(
     }
 
     const section = providerSections.get(index);
+    if (section?.remove) {
+      return [];
+    }
+
     const outputLines =
       section?.changed
         ? [
@@ -478,6 +490,10 @@ function formatTomlKey(value: string, preferredStyle: TomlKeyStyle): string {
 
 function isTomlBareKey(value: string): boolean {
   return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isOfficialModelProvider(provider: string): boolean {
+  return OFFICIAL_MODEL_PROVIDERS.has(provider);
 }
 
 function replaceTomlStringAssignment(

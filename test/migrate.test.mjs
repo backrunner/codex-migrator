@@ -552,6 +552,48 @@ test("provider migration deduplicates config provider sections when target alrea
   assert.match(updated, /new\.example\.com/);
 });
 
+test("provider migration drops custom config when migrating to the official provider", () => {
+  const codexHome = makeTempCodexHome();
+  const config = [
+    'model_provider = "packycode"',
+    "",
+    "[profiles.default]",
+    "model_provider = 'packycode'",
+    "",
+    "[model_providers.packycode]",
+    'name = "packycode"',
+    'base_url = "https://custom.example.com/v1"',
+    'wire_api = "responses"',
+    "requires_openai_auth = true",
+    "",
+  ].join("\n");
+  fs.writeFileSync(path.join(codexHome, "config.toml"), config);
+
+  const result = runMigration(
+    { mode: "provider", targetProvider: "openai", fromProvider: "packycode" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: false,
+      json: true,
+    },
+  );
+
+  const updated = fs.readFileSync(path.join(codexHome, "config.toml"), "utf8");
+  assert.equal(result.config.changedSections, 1);
+  assert.equal(result.config.changedValues, 2);
+  assert.deepEqual(result.config.providerChanges, [
+    { fromProvider: "packycode", toProvider: "openai", sections: 1, values: 2 },
+  ]);
+  assert.match(updated, /model_provider = "openai"/);
+  assert.match(updated, /model_provider = 'openai'/);
+  assert.doesNotMatch(updated, /\[model_providers\.openai\]/);
+  assert.doesNotMatch(updated, /\[model_providers\.packycode\]/);
+  assert.doesNotMatch(updated, /custom\.example\.com/);
+});
+
 test("provider migration without from leaves config provider sections intact", () => {
   const codexHome = makeTempCodexHome();
   const config = [
@@ -727,6 +769,47 @@ test("write provider migration updates sqlite and creates a backup", (t) => {
     .toString("utf8")
     .trim();
   assert.equal(provider, "packycode");
+});
+
+test("write provider migration updates sqlite from custom to official provider", (t) => {
+  try {
+    execFileSync("sqlite3", ["--version"], { stdio: "ignore" });
+  } catch {
+    t.skip("sqlite3 is not available");
+    return;
+  }
+
+  const codexHome = makeTempCodexHome();
+  const database = path.join(codexHome, "state_5.sqlite");
+  execFileSync("sqlite3", [
+    database,
+    [
+      "create table threads (id text primary key, cwd text not null, model_provider text not null);",
+      "insert into threads values ('thread-1', '/old/app', 'packycode');",
+    ].join("\n"),
+  ]);
+
+  const result = runMigration(
+    { mode: "provider", targetProvider: "openai", fromProvider: "packycode" },
+    {
+      write: true,
+      codexHome,
+      includeArchived: false,
+      includeJsonl: false,
+      includeSqlite: true,
+      json: true,
+    },
+  );
+
+  assert.equal(result.sqlite[0].changedRows, 1);
+
+  const provider = execFileSync("sqlite3", [
+    database,
+    "select model_provider from threads where id = 'thread-1';",
+  ])
+    .toString("utf8")
+    .trim();
+  assert.equal(provider, "openai");
 });
 
 test("write project migration preserves nested sqlite cwd with fromDir", (t) => {

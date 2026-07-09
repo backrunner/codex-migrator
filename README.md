@@ -107,6 +107,16 @@ they use `packycode`. Matching `config.toml` references such as
 migration is applied. If the target provider section already exists, the old
 provider section is removed to avoid duplicate TOML tables.
 
+The same command shape works in the other direction, for example:
+
+```bash
+codex-migrate provider openai --from packycode
+```
+
+When the target is the built-in official provider, custom provider sections are
+removed instead of being renamed, so a custom `base_url` is not accidentally
+carried into `[model_providers.openai]`.
+
 If you omit `--from`, every conversation that is not already using the target
 provider is included in the preview. In that mode, `config.toml` provider
 sections are left intact; only `model_provider = "..."` references are updated

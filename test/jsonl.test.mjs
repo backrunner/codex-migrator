@@ -37,6 +37,41 @@ test("provider migration updates only session metadata", () => {
   assert.equal(second.payload.cwd, "/old/root/app");
 });
 
+test("provider migration supports official and custom provider directions", () => {
+  for (const { fromProvider, targetProvider } of [
+    { fromProvider: "openai", targetProvider: "packycode" },
+    { fromProvider: "packycode", targetProvider: "openai" },
+  ]) {
+    const input = [
+      JSON.stringify({
+        timestamp: "now",
+        type: "session_meta",
+        payload: { id: "thread-1", cwd: "/old/root/app", model_provider: fromProvider },
+      }),
+      JSON.stringify({
+        timestamp: "now",
+        type: "turn_context",
+        payload: { cwd: "/old/root/app", workspace_roots: ["/old/root/app"] },
+      }),
+      "",
+    ].join("\n");
+
+    const result = transformJsonlContent(
+      input,
+      { mode: "provider", targetProvider, fromProvider },
+      {
+        ...session,
+        modelProvider: fromProvider,
+      },
+    );
+
+    const [first, second] = result.content.split("\n").map((line) => line && JSON.parse(line));
+    assert.equal(result.changedLines, 1);
+    assert.equal(first.payload.model_provider, targetProvider);
+    assert.equal(second.payload.cwd, "/old/root/app");
+  }
+});
+
 test("projects migration preserves relative project paths", () => {
   const input = [
     JSON.stringify({

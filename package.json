@@ -30,7 +30,7 @@
   ],
   "author": "BackRunner <dev@backrunner.top>",
   "license": "MIT",
-  "packageManager": "pnpm@10.24.0",
+  "packageManager": "pnpm@12.3.4",
   "dependencies": {
     "commander": "^14.0.2"
   },
